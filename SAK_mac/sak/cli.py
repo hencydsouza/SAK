@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, drives, forwarder, nacp, ops, split, tools
+from . import __version__, drives, extract, forwarder, nacp, ops, split, tools
 from .common import Cancelled, Job, SakError
 
 
@@ -95,6 +95,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("extract-saves", "extract saves copied from the USER partition",
              lambda a, j: [ops.extract_saves(a.save_dir, out(a), j, k(a))], files=False)
     sp.add_argument("save_dir", nargs="?", type=Path, default=Path("save"))
+
+    sp = add("extract", "extract exefs/ + romfs/ of a base game (NSP/NSZ/XCI)", lambda a, j: _each(
+        a.files, lambda f: str(extract.extract_title(
+            f, extract.default_dest(f, out(a), a.lasrecomp, a.lasrecomp_dir), j, k(a), a.lasrecomp).folder)))
+    sp.add_argument("--lasrecomp", action="store_true",
+                    help="LASRecomp preset: require Link's Awakening v1.0.0, write <out>/extracted")
+    sp.add_argument("--lasrecomp-dir", type=Path, help="LASRecomp checkout to write extracted/ into")
 
     sp = add("forwarder", "build an NRO / RetroArch forwarder NSP", lambda a, j: [forwarder.build(
         forwarder.ForwarderSpec(

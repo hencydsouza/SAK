@@ -196,8 +196,9 @@ def extract_firmware(xci: Path, out_dir: Path, job: Job, keys: Path | None = Non
     tmp = out_dir / "tmpout"
     shutil.rmtree(tmp, ignore_errors=True)
     try:
-        tools.run([str(hactool), "-x", "-r", "-y", "-k", str(keys), "-t", "xci",
-                   f"--updatedir={tmp}", str(xci)], job, cwd=out_dir)
+        with tools.sanitized_keys(keys) as clean:
+            tools.run([str(hactool), "-x", "-r", "-y", "-k", str(clean), "-t", "xci",
+                       f"--updatedir={tmp}", str(xci)], job, cwd=out_dir)
         if not tmp.is_dir() or not any(tmp.iterdir()):
             raise SakError("hactool extracted no firmware files.\nAre the prod.keys correct?")
         version = firmware_version([p.name for p in tmp.iterdir()])

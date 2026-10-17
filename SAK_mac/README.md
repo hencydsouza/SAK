@@ -25,6 +25,7 @@ The original `SAK.exe` is a compiled AutoIt v3 script. The program itself is jus
 | NRO / RetroArch forwarder | hptnacp.exe + hacbrewpack.exe | `sak/nacp.py` + `hacbrewpack` v3.05, built from source |
 | Format SD card FAT32 | guiformat.exe | `diskutil eraseDisk FAT32`, plus optional `newfs_msdos` with 64 KiB clusters |
 | Self-updater (psxtools.de) | update.exe | dropped (the project is closed) |
+| **New:** extract exefs/romfs | — | `sak/extract.py`: PFS0/HFS0 index → CNMT → Program NCA (+ ticket title key) → `hactool --exefsdir/--romfsdir` |
 
 ## Install
 
@@ -64,9 +65,33 @@ NSC_Builder runs from source at a pinned commit, with a small macOS patch in `sc
 ./sak.command forwarder --name "My App" --nro /switch/myapp/myapp.nro --icon icon.jpg
 ./sak.command forwarder --name "SNES - Mario" --nro /retroarch/cores/snes9x_libretro_libnx.nro \
               --rom "/roms/snes/mario.sfc" --icon mario.jpg
+./sak.command extract Game.nsp                       # -> ./Game/{exefs,romfs}
+./sak.command -o ~/LASRecomp extract --lasrecomp "Links Awakening [01006BB00C6F0000][v0].nsp"
 ./sak.command drives
 sudo ./sak.command fat32 disk4 --confirm disk4 --cluster-64k   # ERASES disk4
 ```
+
+## Extract exefs / romfs (new)
+
+`extract` dumps a base game's `exefs/` (`main`, `sdk`, `subsdk*`, `rtld`, `main.npdm`) and `romfs/` from an NSP, NSZ or XCI.
+
+- NSZ/XCZ input is decompressed first.
+- Titles that come with a ticket use its title key. Personalized tickets are rejected.
+- Update and DLC packages are refused, because their programs cannot be extracted on their own.
+- While it runs it needs about twice the game's size in free space.
+
+`--lasrecomp` prepares input for [LASRecomp](https://github.com/peiikai/LASRecomp):
+
+- It requires *Link's Awakening* `01006BB00C6F0000` at v0 (1.0.0, no update).
+- It requires both `main` and `sdk`.
+- It checks that `main`'s build ID starts with `ae16f71e002af8cb`, the same check LASRecomp's launcher does.
+- It writes `<out>/extracted/{exefs,romfs}`, or into `--lasrecomp-dir`.
+
+LASRecomp lifts the NSOs to C itself, so no separate decompilation step is needed.
+
+## Keys hygiene
+
+hactool and hacbrewpack reject an entire keyset if a single line is malformed. Some dumpers write 34-hex-digit `*_kek_source` lines. The port therefore passes those tools a temporary copy containing only well-formed lines; the copy is readable only by you and deleted afterwards. Your own `prod.keys` is never modified. hactool also echoes unknown keys with their values, and the port drops those lines from its logs.
 
 ## Behaviour kept from SAK
 
@@ -101,7 +126,7 @@ sudo ./sak.command fat32 disk4 --confirm disk4 --cluster-64k   # ERASES disk4
 
 ## What has been verified
 
-- **Unit and integration tests** (`python3 -m unittest discover tests`, 24 tests): split/merge round trips, trim, naming rules, cancel cleanup, the NACP encoding, the forwarder tree, the firmware map and save metadata parsing. squirrel and hacbrewpack were replaced by fake scripts in these tests. They check the argument lists, the keys hand-off, lower-casing of input extensions and how output files are collected.
+- **Unit and integration tests** (`python3 -m unittest discover tests`, 32 tests): split/merge round trips, trim, naming rules, cancel cleanup, the NACP encoding, the forwarder tree, the firmware map and save metadata parsing. squirrel and hacbrewpack were replaced by fake scripts in these tests. They check the argument lists, the keys hand-off, lower-casing of input extensions and how output files are collected.
 - **Real tools with a fake keys file:** squirrel, hactool, hacbrewpack and savex each received the port's arguments and keys and stopped at key loading or input validation with a clean error. No temporary files were left behind.
 - **Live on macOS arm64:**
   - A 4 GiB-plus XCI was split into a part of exactly 0xFFFF0000 bytes plus the rest and merged back byte-identical.
@@ -109,6 +134,7 @@ sudo ./sak.command fat32 disk4 --confirm disk4 --cluster-64k   # ERASES disk4
   - The GUI API was tested end-to-end.
   - The FAT32 command refuses the internal `disk0`.
 - **Real data, Update NSP:** a 6.27 GB base game plus its v65536 update were merged into a 6.31 GB NSP in 14 s. Every NCA, the ticket and the cert are byte-identical to the source files. Only `cnmt.xml` was regenerated.
+- **Real data, extract --lasrecomp:** Link's Awakening v1.0.0 NSP → `extracted/exefs` (6 NSOs + npdm) and `romfs` (3,836 files, 5.8 GB) in about 35 s, with build ID `ae16f71e002af8cb…`.
 - **Not yet verified with real data:** Update XCI, XCI↔NSP conversion, patching, compression, firmware extraction, save extraction and forwarder NSP building.
   - The XCI writers had the same `os.remove(outf)` bug and are patched, but they have not been run on real files.
   - The port now rejects any squirrel output smaller than 1/1000 of its input size, so this class of silent truncation surfaces as an error.

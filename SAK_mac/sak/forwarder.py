@@ -141,7 +141,9 @@ def build(spec: ForwarderSpec, out_dir: Path, job: Job, keys: Path | None = None
         ]
         if spec.no_logo:
             cmd.append("--nologo")
-        code, _ = tools.run(cmd, job, cwd=root)
+        with tools.sanitized_keys(keys) as clean:
+            cmd[2] = str(clean)
+            code, _ = tools.run(cmd, job, cwd=root)
         built = sorted((root / "hcb_nsp").glob("*.nsp"))
         if not built:
             raise SakError(f"NRO forwarder create failed: {spec.name} (hacbrewpack exit {code})")

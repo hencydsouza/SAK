@@ -2,6 +2,7 @@ import http.client
 import json
 import os
 import stat
+import struct
 import sys
 import tempfile
 import threading
@@ -11,7 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sak import forwarder, nacp, ops, split, tools  # noqa: E402
+from sak import extract, forwarder, nacp, ops, split, tools  # noqa: E402
 from sak.common import Job, SakError  # noqa: E402
 
 PART = 4 * 32768  # shrink the 0xFFFF0000 split size to 4 blocks for tests
@@ -292,6 +293,136 @@ o = pathlib.Path(a[a.index("-o") + 1]); (o / "Game [0100000000010000].{ext}").wr
         self.assertEqual(ops._parse_save_meta(legacy)["user_id"], "u")
 
 
+def build_pfs0(files: dict[str, bytes]) -> bytes:
+    names = b"".join(n.encode() + b"\0" for n in files)
+    names += b"\0" * ((-len(names)) % 0x20)
+    table, data, name_off = b"", b"", 0
+    for n, blob in files.items():
+        table += struct.pack("<QQII", len(data), len(blob), name_off, 0)
+        name_off += len(n) + 1
+        data += blob
+    return b"PFS0" + struct.pack("<III", len(files), len(names), 0) + table + names + data
+
+
+def build_cnmt(title_id: int, version: int, meta_type: int, contents: list[tuple[str, int]]) -> bytes:
+    head = struct.pack("<QIBB", title_id, version, meta_type, 0) + struct.pack("<HHH", 0x10, len(contents), 0)
+    head = head.ljust(0x20, b"\0") + b"\0" * 0x10  # 0x10-byte extended header
+    for nca_id, ctype in contents:
+        head += b"\0" * 0x20 + bytes.fromhex(nca_id) + (0).to_bytes(6, "little") + bytes([ctype, 0])
+    return head
+
+
+PROG_ID = "aa" * 16
+META_ID = "bb" * 16
+
+
+class ExtractTests(Tmp):
+    def fake_hactool(self, title_id=0x01006BB00C6F0000, version=0, meta_type=0x80,
+                     build_id="ae16f71e002af8cb" + "00" * 24, with_sdk=True):
+        cnmt = self.tmp / "fake.cnmt"
+        cnmt.write_bytes(build_cnmt(title_id, version, meta_type, [(PROG_ID, 1), (META_ID, 0)]))
+        log = self.tmp / "hactool.json"
+        exe = write_exe(self.tmp / "hactool", f"""
+import json, os, pathlib, shutil, sys
+a = sys.argv[1:]
+with open({str(log)!r}, "a") as fh: fh.write(json.dumps(a) + "\\n")
+print('[WARN]: Failed to match key "secret_key", (value "deadbeef")')
+opt = {{x.split("=", 1)[0]: x.split("=", 1)[1] for x in a if x.startswith("--") and "=" in x}}
+if "--section0dir" in opt:
+    d = pathlib.Path(opt["--section0dir"]); d.mkdir()
+    shutil.copy({str(cnmt)!r}, d / "Application_x.cnmt")
+if "--exefsdir" in opt:
+    e = pathlib.Path(opt["--exefsdir"]); e.mkdir()
+    (e / "main").write_bytes(b"NSO0" + b"\\0" * 0x3C + bytes.fromhex({build_id!r}))
+    if {with_sdk!r}: (e / "sdk").write_bytes(b"NSO0")
+    r = pathlib.Path(opt["--romfsdir"]); r.mkdir(); (r / "a.bin").write_bytes(b"x")
+""")
+        return exe, log
+
+    def nsp(self, extra=None):
+        files = {f"{META_ID}.cnmt.nca": b"meta", f"{PROG_ID}.nca": b"program" * 10}
+        files.update(extra or {})
+        p = self.tmp / "game.nsp"
+        p.write_bytes(build_pfs0(files))
+        return p
+
+    def keys(self):
+        k = self.tmp / "prod.keys"
+        k.write_text("good_key = " + "ab" * 16 + "\nbad_kek_source_06 = " + "c" * 34 + "\n")
+        return k
+
+    def test_read_container_pfs0(self):
+        entries = extract.read_container(self.nsp())
+        self.assertEqual(sorted(entries), sorted([f"{META_ID}.cnmt.nca", f"{PROG_ID}.nca"]))
+        e = entries[f"{PROG_ID}.nca"]
+        with open(self.tmp / "game.nsp", "rb") as fh:
+            fh.seek(e.offset)
+            self.assertEqual(fh.read(e.size), b"program" * 10)
+
+    def test_parse_cnmt(self):
+        meta = extract.parse_cnmt(build_cnmt(0x0100ABCD00010000, 65536, 0x81, [(PROG_ID, 1), (META_ID, 0)]))
+        self.assertEqual((meta.title_id, meta.version, meta.type_name), ("0100ABCD00010000", 65536, "Patch"))
+        self.assertEqual(meta.programs, [(PROG_ID, 0)])
+
+    def test_ticket_titlekey(self):
+        tik = bytearray(0x2C0)
+        struct.pack_into("<I", tik, 0, 0x10004)
+        tik[0x180:0x190] = bytes(range(16))
+        tik[0x2A0:0x2B0] = bytes.fromhex("01006bb00c6f0000000000000000000a")
+        self.assertEqual(extract.ticket_titlekey(bytes(tik)), ("01006bb00c6f0000000000000000000a", bytes(range(16)).hex()))
+        tik[0x281] = 1  # personalized
+        with self.assertRaisesRegex(SakError, "personalized"):
+            extract.ticket_titlekey(bytes(tik))
+
+    def test_sanitized_keys_drop_malformed_and_cleanup(self):
+        with tools.sanitized_keys(self.keys()) as clean:
+            text = clean.read_text()
+            self.assertEqual(oct(clean.stat().st_mode & 0o777), "0o600")
+        self.assertIn("good_key", text)
+        self.assertNotIn("bad_kek_source", text)
+        self.assertFalse(clean.exists())
+
+    def test_lasrecomp_flow(self):
+        exe, log = self.fake_hactool()
+        keys = self.keys()
+        out = self.tmp / "out"
+        lines = []
+        job = Job(on_log=lines.append)
+        with mock.patch.dict(os.environ, {"SAK_HACTOOL": str(exe)}):
+            res = extract.extract_title(self.nsp(), extract.default_dest(self.tmp / "game.nsp", out, True), job, keys, True)
+        self.assertEqual(res.folder, (out / "extracted").resolve())
+        self.assertEqual(sorted(p.name for p in res.folder.iterdir()), ["exefs", "romfs"])
+        self.assertEqual(res.exefs_files, ["main", "sdk"])
+        self.assertTrue(res.build_id.startswith("ae16f71e002af8cb"))
+        calls = [json.loads(l) for l in log.read_text().splitlines()]
+        keyfile = calls[0][calls[0].index("-k") + 1]
+        self.assertNotEqual(keyfile, str(keys))  # sanitized copy, not the user's file
+        self.assertFalse(Path(keyfile).exists())
+        self.assertFalse(any("Failed to match key" in l for l in lines))  # key echo redacted
+        self.assertEqual([p.name for p in out.iterdir()], ["extracted"])  # temp dirs cleaned
+
+    def test_lasrecomp_rejects_update_and_wrong_build(self):
+        for kw, msg in [(dict(version=65536), "v1.0.0"), (dict(title_id=0x0100000000010000), "Link's Awakening"),
+                        (dict(build_id="11" * 32), "build id"), (dict(with_sdk=False), "sdk")]:
+            exe, _ = self.fake_hactool(**kw)
+            with mock.patch.dict(os.environ, {"SAK_HACTOOL": str(exe)}), self.assertRaisesRegex(SakError, msg):
+                extract.extract_title(self.nsp(), self.tmp / f"o{len(msg)}" / "extracted", Job(), self.keys(), True)
+
+    def test_generic_refuses_patch_and_uses_ticket(self):
+        exe, _ = self.fake_hactool(meta_type=0x81)
+        with mock.patch.dict(os.environ, {"SAK_HACTOOL": str(exe)}), self.assertRaisesRegex(SakError, "Patch"):
+            extract.extract_title(self.nsp(), self.tmp / "p", Job(), self.keys())
+        tik = bytearray(0x2C0)
+        struct.pack_into("<I", tik, 0, 0x10004)
+        tik[0x180:0x190] = b"\x11" * 16
+        exe, log = self.fake_hactool(title_id=0x0100000000010000)
+        nsp = self.nsp({"0100000000010000000000000000000a.tik": bytes(tik)})
+        with mock.patch.dict(os.environ, {"SAK_HACTOOL": str(exe)}):
+            extract.extract_title(nsp, self.tmp / "g", Job(), self.keys())
+        extract_call = json.loads(log.read_text().splitlines()[-1])
+        self.assertIn("--titlekey=" + "11" * 16, extract_call)
+
+
 class GuiTests(unittest.TestCase):
     def test_token_and_host_enforced(self):
         from http.server import ThreadingHTTPServer
@@ -308,7 +439,10 @@ class GuiTests(unittest.TestCase):
                 c = http.client.HTTPConnection("127.0.0.1", port[0])
                 c.request("GET", path, headers=headers)
                 r = c.getresponse()
-                return r.status, r.read()
+                try:
+                    return r.status, r.read()
+                finally:
+                    c.close()
 
             host = {"Host": f"127.0.0.1:{port[0]}"}
             self.assertEqual(req("/api/state", host)[0], 403)
@@ -321,6 +455,7 @@ class GuiTests(unittest.TestCase):
             self.assertIn(app.token.encode(), body)
         finally:
             httpd.shutdown()
+            httpd.server_close()
 
 
 if __name__ == "__main__":
