@@ -39,7 +39,12 @@ You need the Xcode Command Line Tools (`xcode-select --install`) and `python3` 3
 
 Keys are looked up in this order: `--keys` → `$SAK_KEYS` → `SAK_mac/keys/prod.keys` → `SAK_mac/keys/keys.dat` → `~/.switch/prod.keys`.
 
-NSC_Builder runs from source at a pinned commit, with a small macOS patch in `scripts/patches/nscb-macos.patch`. The patch fixes key lookup, which upstream hard-coded to a Windows path, and an upstream crash at import. The port hands squirrel the keys through `NSCB_KEYS_FILE`, so no copy of your keys is written anywhere. See `tools/README_TOOLS_PY.md` for details.
+NSC_Builder runs from source at a pinned commit, with a small macOS patch in `scripts/patches/nscb-macos.patch`. The patch fixes:
+
+- **Key lookup:** upstream hard-coded a Windows path, and crashed at import when no keys file was found.
+- **Python ≥ 3.11 enum change:** `str(IntEnum)` now returns the bare number. NSC_Builder compares `str(contentType) == 'Content.META'`, so on modern Python every NSP looked empty and `-dmul` wrote a 32-byte `UNKNOWN.nsp`. The patch restores the Python 3.7 `str` and `format` behaviour.
+- **Windows-only `ofolder + '\\'`:** used when generating `cnmt.xml`.
+- **`os.remove(outf)` after appending `cnmt.xml`:** upstream meant `xmlfile`. On Windows the open output file can't be deleted, so the bug stayed hidden. On macOS it unlinked the NSP/XCI mid-write, leaving only the ticket and cert (about 2.5 KB). The port hands squirrel the keys through `NSCB_KEYS_FILE`, so no copy of your keys is written anywhere. See `tools/README_TOOLS_PY.md` for details.
 
 ## Use
 
@@ -103,7 +108,10 @@ sudo ./sak.command fat32 disk4 --confirm disk4 --cluster-64k   # ERASES disk4
   - `hactool`, `hacbrewpack` and `savex` build and run.
   - The GUI API was tested end-to-end.
   - The FAT32 command refuses the internal `disk0`.
-- **Not verified:** any operation that needs real keys and real game or save files. That is conversion, patching, update merging, compression, firmware extraction, save extraction and forwarder NSP building. No keys or game data were available for testing.
+- **Real data, Update NSP:** a 6.27 GB base game plus its v65536 update were merged into a 6.31 GB NSP in 14 s. Every NCA, the ticket and the cert are byte-identical to the source files. Only `cnmt.xml` was regenerated.
+- **Not yet verified with real data:** Update XCI, XCI↔NSP conversion, patching, compression, firmware extraction, save extraction and forwarder NSP building.
+  - The XCI writers had the same `os.remove(outf)` bug and are patched, but they have not been run on real files.
+  - The port now rejects any squirrel output smaller than 1/1000 of its input size, so this class of silent truncation surfaces as an error.
 
 ## Layout
 

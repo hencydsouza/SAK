@@ -20,6 +20,8 @@ from pathlib import Path
 from . import split, tools
 from .common import Job, SakError, ensure_free_space
 
+_MIN_CHECKED_INPUT = 100 * 1024 * 1024
+
 COMPRESSION_LEVELS = {"fast": 1, "intermediate": 10, "normal": 17, "hard": 22}
 
 # squirrel flag sets exactly as SAK v0.7.14 passed them
@@ -63,6 +65,13 @@ def _squirrel(args: list[str], job: Job, keys: Path, out_dir: Path, patterns: li
                            if p.is_file() and p.stat().st_size > 0 and not p.stem.startswith("UNKNOWN")})
         if not produced:
             raise SakError(f"squirrel produced no output (exit {code}).\nAre the keys.dat/prod.keys correct?")
+        # Guard against silently truncated output (e.g. the upstream bug that unlinked the
+        # NSP mid-write, leaving a few KB "success" for a multi-GB job).
+        inputs = list_files or [Path(args[args.index("-dc") + 1])]
+        size_in = sum(Path(p).stat().st_size for p in inputs)
+        size_out = sum(p.stat().st_size for p in produced)
+        if size_in > _MIN_CHECKED_INPUT and size_out < size_in / 1000:
+            raise SakError(f"squirrel output looks truncated ({size_out} bytes from {size_in} bytes of input)")
         moved = []
         for p in produced:
             dest = out_dir / p.name

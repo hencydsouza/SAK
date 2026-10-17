@@ -242,6 +242,16 @@ o = pathlib.Path(a[a.index("-o") + 1]); (o / "Game [0100000000010000].{ext}").wr
         with mock.patch.dict(os.environ, {"SAK_SQUIRREL": str(self.tmp / "nope.py")}), self.assertRaises(SakError):
             ops.update_title(self.tmp / "missing.xci", [], self.tmp, Job(), True, keys)
 
+    def test_truncated_output_rejected(self):
+        script, _ = self.fake_squirrel("nsp")  # writes a 1-byte "result"
+        src = self.tmp / "big.nsp"
+        with src.open("wb") as fh:
+            fh.truncate(200 * 1024 * 1024)  # sparse
+        keys = self.tmp / "prod.keys"
+        keys.write_text("k = 1\n")
+        with mock.patch.dict(os.environ, {"SAK_SQUIRREL": str(script)}), self.assertRaisesRegex(SakError, "truncated"):
+            ops.update_title(src, [], self.tmp / "out", Job(), False, keys)
+
     def test_patch_renames(self):
         script, log = self.fake_squirrel("xci")
         src = self.tmp / "g.xci"

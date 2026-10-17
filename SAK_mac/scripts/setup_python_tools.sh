@@ -80,7 +80,14 @@ elif git -C "$NSCB_DIR" apply --check "$PATCH" 2>/dev/null; then
   git -C "$NSCB_DIR" apply "$PATCH"
   log "applied $(basename "$PATCH")"
 else
-  die "cannot apply $PATCH (local edits in $NSCB_DIR?). Inspect with: git -C '$NSCB_DIR' status"
+  # Most likely an older revision of our patch. tools/nscb is a managed clone, so reset it
+  # to the pinned commit and apply the current patch.
+  log "patch out of date - resetting $NSCB_DIR to the pinned commit"
+  git -C "$NSCB_DIR" checkout -q -- .
+  git -C "$NSCB_DIR" apply --check "$PATCH" 2>/dev/null \
+    || die "cannot apply $PATCH. Inspect with: git -C '$NSCB_DIR' status"
+  git -C "$NSCB_DIR" apply "$PATCH"
+  log "applied $(basename "$PATCH")"
 fi
 
 # ---------------------------------------------------------------- 4. pip deps + nsz
