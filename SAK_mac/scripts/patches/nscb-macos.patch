@@ -1,0 +1,108 @@
+diff --git a/py/ztools/lib/Keys.py b/py/ztools/lib/Keys.py
+index 2331c14..fe4a1c1 100644
+--- a/py/ztools/lib/Keys.py
++++ b/py/ztools/lib/Keys.py
+@@ -132,23 +132,11 @@ def load(fileName):
+ 		else:
+ 			pass
+ 
+-if sq_settings.key_system =="production":
+-	raw_keys_file = Path('keys.txt')
+-	raw_keys_file2 = Path('ztools\\keys.txt')
+-	raw_keys_file3 = Path('ztools/keys.txt')
+-else:
+-	raw_keys_file = Path('dev_keys.txt')
+-	raw_keys_file2 = Path('ztools\\dev_keys.txt')
+-	raw_keys_file3 = Path('ztools/keys.txt')	
+-	
+-if raw_keys_file.is_file():
++# macOS port: portable lookup (see sq_settings.find_keys_file)
++raw_keys_file = sq_settings.find_keys_file()
++if raw_keys_file:
+ 	load(raw_keys_file)
+-elif raw_keys_file2.is_file():
+-	load(raw_keys_file2)
+-elif raw_keys_file3.is_file():
+-	load(raw_keys_file3)	
+-	
+-if not raw_keys_file.is_file() and not raw_keys_file2.is_file() and not raw_keys_file3.is_file():
++else:
+ 	print('keys.txt missing')
+ 		
+ #for k in titleKeks:
+diff --git a/py/ztools/lib/NXKeys.py b/py/ztools/lib/NXKeys.py
+index de8518a..39c4cc1 100644
+--- a/py/ztools/lib/NXKeys.py
++++ b/py/ztools/lib/NXKeys.py
+@@ -11,20 +11,15 @@ class Keys(dict):
+ 		is_key  = re.compile(r'''\s*([a-zA-Z0-9_]*)\s* # name
+ 								=
+ 								\s*([a-fA-F0-9]*)\s* # key''', re.X)
+-		try:
+-			if my_file.is_file():
+-				f = open('keys.txt', 'r')
+-			if my_file2.is_file():
+-				f = open('ztools\\keys.txt', 'r')
+-		except FileNotFoundError:
+-			try:
+-				f = open(path.join(path.dirname(path.abspath(__file__)), '%s' % self.keys_type), 'r')
+-			except FileNotFoundError:
+-				raise FileNotFoundError('Need key file %s.keys in either %s or %s' % (self.keys_type, 
+-					path.expanduser('~/.switch'), path.dirname(path.abspath(__file__))))
+-		iterator = (re.search(is_key, l) for l in f)
+-		super(Keys, self).__init__({r[1]: uhx(r[2]) for r in iterator if r is not None})
+-		f.close()
++		# macOS port: portable lookup; empty key set (KeyError on use) instead of crashing at import
++		import sq_settings
++		kf = sq_settings.find_keys_file('keys.txt')
++		if kf is None:
++			super(Keys, self).__init__({})
++			return
++		with open(kf, 'r', encoding='utf8') as f:
++			iterator = (re.search(is_key, l) for l in f)
++			super(Keys, self).__init__({r[1]: uhx(r[2]) for r in iterator if r is not None})
+ 
+ 	def __getitem__(self, item):
+ 		try:
+diff --git a/py/ztools/lib/sq_settings.py b/py/ztools/lib/sq_settings.py
+index 4514479..1a17af6 100644
+--- a/py/ztools/lib/sq_settings.py
++++ b/py/ztools/lib/sq_settings.py
+@@ -6,6 +6,25 @@ def set_prod_environment():
+ 	global key_system
+ 	key_system="production"
+ 
++def find_keys_file(name=None):
++	# macOS port: portable key lookup shared by Keys.py and NXKeys.py.
++	# Order: $NSCB_KEYS_FILE, <squirrel dir>/<name>, <caller cwd>/<name>, ~/.switch/(prod|dev).keys
++	import os
++	if name is None:
++		name = 'keys.txt' if key_system == 'production' else 'dev_keys.txt'
++	cands = []
++	if os.environ.get('NSCB_KEYS_FILE'):
++		cands.append(os.environ['NSCB_KEYS_FILE'])
++	cands.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), name))
++	cands.append(os.path.join('ztools', name))
++	if os.environ.get('SQUIRREL_ORIG_CWD'):
++		cands.append(os.path.join(os.environ['SQUIRREL_ORIG_CWD'], name))
++	cands.append(os.path.expanduser(os.path.join('~', '.switch', 'prod.keys' if name == 'keys.txt' else 'dev.keys')))
++	for c in cands:
++		if os.path.isfile(c):
++			return c
++	return None
++
+ try:
+ 	a=key_system
+ except:
+diff --git a/py/ztools/squirrel.py b/py/ztools/squirrel.py
+index 4a6326e..b5c50a2 100644
+--- a/py/ztools/squirrel.py
++++ b/py/ztools/squirrel.py
+@@ -34,6 +34,7 @@ import urllib3
+ import json
+ from zipfile import ZipFile
+ 
++os.environ.setdefault('SQUIRREL_ORIG_CWD', os.getcwd())  # macOS port: keys.txt may live in caller cwd
+ os.chdir(os.path.dirname(os.path.abspath(__file__)))
+ sys.path.insert(0, 'lib')
+ try:

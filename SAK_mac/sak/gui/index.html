@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switch Army Knife</title>
+<style>
+:root {
+  --bg: #f4f4f1; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #deded8;
+  --accent: #d6332b; --accent-ink: #ffffff; --ok: #2f7d4f; --warn: #b46a00; --code: #f0f0eb;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #151514; --panel: #1f1f1d; --ink: #ecece6; --muted: #9a9a92; --line: #33332f;
+          --accent: #ff5a4f; --accent-ink: #151514; --ok: #6cc28d; --warn: #f0a33a; --code: #262623; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+       font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif; }
+header { display: flex; align-items: baseline; gap: 12px; padding: 16px 24px; border-bottom: 1px solid var(--line); }
+header h1 { margin: 0; font-size: 17px; letter-spacing: -0.01em; }
+header h1 b { color: var(--accent); }
+header .ver { color: var(--muted); font-size: 12px; }
+.layout { display: grid; grid-template-columns: 210px 1fr; min-height: calc(100vh - 56px); }
+nav { border-right: 1px solid var(--line); padding: 12px 8px; }
+nav h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 14px 10px 4px; }
+nav button { display: block; width: 100%; text-align: left; border: 0; background: none; color: var(--ink);
+             padding: 6px 10px; border-radius: 6px; font: inherit; cursor: pointer; }
+nav button:hover { background: var(--code); }
+nav button.active { background: var(--accent); color: var(--accent-ink); }
+main { padding: 20px 28px; max-width: 860px; }
+section { display: none; } section.active { display: block; }
+h3 { margin: 0 0 4px; font-size: 18px; }
+p.help { margin: 0 0 16px; color: var(--muted); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+.row { display: flex; gap: 8px; align-items: center; }
+input[type=text], select, textarea { flex: 1; width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--ink); font: 13px ui-monospace, "SF Mono", Menlo, monospace; }
+textarea { min-height: 54px; resize: vertical; }
+.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--ink); font-size: 13px; }
+button.btn { border: 1px solid var(--line); background: var(--panel); color: var(--ink); padding: 7px 12px; border-radius: 6px;
+             font: inherit; cursor: pointer; white-space: nowrap; }
+button.btn:hover { border-color: var(--muted); }
+button.go { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; margin-top: 14px; }
+button:disabled { opacity: .5; cursor: default; }
+.status-grid { display: grid; grid-template-columns: 110px 1fr; gap: 4px 12px; font-size: 13px; }
+.status-grid code { font: 12px ui-monospace, Menlo, monospace; word-break: break-all; }
+.ok { color: var(--ok); } .bad { color: var(--warn); }
+#jobpanel { position: sticky; bottom: 0; }
+.bar { height: 6px; background: var(--code); border-radius: 3px; overflow: hidden; margin: 8px 0; }
+.bar > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+pre#log { background: var(--code); border-radius: 6px; padding: 10px; max-height: 240px; overflow: auto; margin: 8px 0 0;
+          font: 12px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+.danger { border-color: var(--warn); }
+@media (max-width: 720px) {
+  .layout { grid-template-columns: 1fr; } nav { border-right: 0; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; }
+  nav h2 { width: 100%; } nav button { width: auto; } main { padding: 16px; }
+}
+</style>
+</head>
+<body>
+<header><h1>Switch <b>Army</b> Knife</h1><span class="ver" id="ver"></span></header>
+<div class="layout">
+<nav id="nav">
+  <h2>XCI</h2>
+  <button data-s="split_xci">Split / merge</button>
+  <button data-s="update_xci">Update with update/DLC</button>
+  <button data-s="xci2nsp">Convert to NSP</button>
+  <button data-s="compress_xci">Compress / decompress</button>
+  <button data-s="patch_xci">Patch to lower firmware</button>
+  <button data-s="extract_fw">Extract firmware</button>
+  <h2>NSP</h2>
+  <button data-s="split_nsp">Split / merge</button>
+  <button data-s="update_nsp">Update with update/DLC</button>
+  <button data-s="nsp2xci">Convert to XCI</button>
+  <button data-s="compress_nsp">Compress / decompress</button>
+  <button data-s="patch_nsp">Patch to lower firmware</button>
+  <h2>Other</h2>
+  <button data-s="saves">Extract savegames</button>
+  <button data-s="forwarder">NRO forwarder</button>
+  <button data-s="sd">SD card / FAT32</button>
+  <button data-s="settings">Settings & status</button>
+</nav>
+<main>
+
+<section id="split_xci">
+  <h3>Split / merge XCI</h3>
+  <p class="help">Split XCIs over 4 GB into FAT32-sized <code>_splitted.xc0, .xc1…</code> parts, or merge <code>.xc0</code> / <code>.xci.00</code> / <code>00</code> parts back.</p>
+  <div class="card">
+    <label>XCI files to split</label>
+    <div class="row"><textarea id="sx_files"></textarea><button class="btn" data-pick="files" data-target="sx_files" data-types="xci">Choose…</button></div>
+    <div class="check"><input type="checkbox" id="sx_trim"><span>Trim 0xFF padding from parts after the first</span></div>
+    <button class="btn go" data-run="split_xci" data-files="sx_files" data-opts="trim:sx_trim">Split</button>
+  </div>
+  <div class="card">
+    <label>First part (.xc0, .xci.00 or 00)</label>
+    <div class="row"><textarea id="mx_files"></textarea><button class="btn" data-pick="files" data-target="mx_files">Choose…</button></div>
+    <button class="btn go" data-run="merge_xci" data-files="mx_files">Merge</button>
+  </div>
+</section>
+
+<section id="split_nsp">
+  <h3>Split / merge NSP</h3>
+  <p class="help">Split NSPs over 4 GB into a <code>_splitted.nsp</code> folder with parts <code>00, 01…</code>. On an SD card the folder needs the archive bit; SAK sets it, but if the folder was created on APFS, fix it on the Switch (Hekate → Tools → Archive bit).</p>
+  <div class="card">
+    <label>NSP files to split</label>
+    <div class="row"><textarea id="sn_files"></textarea><button class="btn" data-pick="files" data-target="sn_files" data-types="nsp">Choose…</button></div>
+    <button class="btn go" data-run="split_nsp" data-files="sn_files">Split</button>
+  </div>
+  <div class="card">
+    <label>Split NSP folder (or its 00 part)</label>
+    <div class="row"><textarea id="mn_files"></textarea><button class="btn" data-pick="folder" data-target="mn_files">Choose…</button></div>
+    <button class="btn go" data-run="merge_nsp" data-files="mn_files">Merge</button>
+  </div>
+</section>
+
+<section id="update_xci">
+  <h3>Update XCI</h3>
+  <p class="help">Bundle a base game with its update and/or DLCs into one XCI (NSC_Builder multi-content).</p>
+  <div class="card">
+    <label>Base XCI</label>
+    <div class="row"><input type="text" id="ux_base"><button class="btn" data-pick="file" data-target="ux_base" data-types="xci">Choose…</button></div>
+    <label>Updates / DLC NSPs</label>
+    <div class="row"><textarea id="ux_files"></textarea><button class="btn" data-pick="files" data-target="ux_files" data-types="nsp">Choose…</button></div>
+    <button class="btn go" data-run="update_xci" data-files="ux_files" data-base="ux_base">Build updated XCI</button>
+  </div>
+</section>
+
+<section id="update_nsp">
+  <h3>Update NSP</h3>
+  <p class="help">Bundle a base game with its update and/or DLCs into one NSP.</p>
+  <div class="card">
+    <label>Base NSP</label>
+    <div class="row"><input type="text" id="un_base"><button class="btn" data-pick="file" data-target="un_base" data-types="nsp">Choose…</button></div>
+    <label>Updates / DLC NSPs</label>
+    <div class="row"><textarea id="un_files"></textarea><button class="btn" data-pick="files" data-target="un_files" data-types="nsp">Choose…</button></div>
+    <button class="btn go" data-run="update_nsp" data-files="un_files" data-base="un_base">Build updated NSP</button>
+  </div>
+</section>
+
+<section id="xci2nsp">
+  <h3>Convert XCI to NSP</h3>
+  <div class="card">
+    <label>XCI files</label>
+    <div class="row"><textarea id="xn_files"></textarea><button class="btn" data-pick="files" data-target="xn_files" data-types="xci">Choose…</button></div>
+    <div class="check"><input type="checkbox" id="xn_split"><span>Split resulting NSPs for FAT32</span></div>
+    <button class="btn go" data-run="xci2nsp" data-files="xn_files" data-opts="split:xn_split">Convert</button>
+  </div>
+</section>
+
+<section id="nsp2xci">
+  <h3>Convert NSP to XCI</h3>
+  <p class="help">Games only.</p>
+  <div class="card">
+    <label>NSP files</label>
+    <div class="row"><textarea id="nx_files"></textarea><button class="btn" data-pick="files" data-target="nx_files" data-types="nsp">Choose…</button></div>
+    <button class="btn go" data-run="nsp2xci" data-files="nx_files">Convert</button>
+  </div>
+</section>
+
+<section id="compress_xci">
+  <h3>Compress XCI → XCZ / decompress XCZ → XCI</h3>
+  <div class="card">
+    <label>XCI files</label>
+    <div class="row"><textarea id="cx_files"></textarea><button class="btn" data-pick="files" data-target="cx_files" data-types="xci">Choose…</button></div>
+    <label>Compression</label>
+    <select id="cx_level"><option value="fast">Fast (1)</option><option value="intermediate">Intermediate (10)</option><option value="normal" selected>Normal (17)</option><option value="hard">Hard (22)</option></select>
+    <button class="btn go" data-run="compress" data-files="cx_files" data-opts="level:cx_level">Compress</button>
+  </div>
+  <div class="card">
+    <label>XCZ files</label>
+    <div class="row"><textarea id="dx_files"></textarea><button class="btn" data-pick="files" data-target="dx_files" data-types="xcz">Choose…</button></div>
+    <button class="btn go" data-run="decompress" data-files="dx_files">Decompress</button>
+  </div>
+</section>
+
+<section id="compress_nsp">
+  <h3>Compress NSP → NSZ / decompress NSZ → NSP</h3>
+  <div class="card">
+    <label>NSP files</label>
+    <div class="row"><textarea id="cn_files"></textarea><button class="btn" data-pick="files" data-target="cn_files" data-types="nsp">Choose…</button></div>
+    <label>Compression</label>
+    <select id="cn_level"><option value="fast">Fast (1)</option><option value="intermediate">Intermediate (10)</option><option value="normal" selected>Normal (17)</option><option value="hard">Hard (22)</option></select>
+    <button class="btn go" data-run="compress" data-files="cn_files" data-opts="level:cn_level">Compress</button>
+  </div>
+  <div class="card">
+    <label>NSZ files</label>
+    <div class="row"><textarea id="dn_files"></textarea><button class="btn" data-pick="files" data-target="dn_files" data-types="nsz">Choose…</button></div>
+    <button class="btn go" data-run="decompress" data-files="dn_files">Decompress</button>
+  </div>
+</section>
+
+<section id="patch_xci">
+  <h3>Patch XCI to lower firmware</h3>
+  <p class="help">Rewrites the required system version / key generation. Output is <code>*_patched.xci</code>.</p>
+  <div class="card">
+    <label>XCI or NSP files</label>
+    <div class="row"><textarea id="px_files"></textarea><button class="btn" data-pick="files" data-target="px_files">Choose…</button></div>
+    <button class="btn go" data-run="patch_xci" data-files="px_files">Patch</button>
+  </div>
+</section>
+
+<section id="patch_nsp">
+  <h3>Patch NSP to lower firmware</h3>
+  <div class="card">
+    <label>NSP files</label>
+    <div class="row"><textarea id="pn_files"></textarea><button class="btn" data-pick="files" data-target="pn_files" data-types="nsp">Choose…</button></div>
+    <div class="check"><input type="checkbox" id="pn_split"><span>Split resulting NSPs for FAT32</span></div>
+    <button class="btn go" data-run="patch_nsp" data-files="pn_files" data-opts="split:pn_split">Patch</button>
+  </div>
+</section>
+
+<section id="extract_fw">
+  <h3>Extract firmware from XCI</h3>
+  <p class="help">Dumps the cartridge update partition to <code>Firmware &lt;version&gt;</code> (version from the bundled NCA map).</p>
+  <div class="card">
+    <label>XCI files</label>
+    <div class="row"><textarea id="fw_files"></textarea><button class="btn" data-pick="files" data-target="fw_files" data-types="xci">Choose…</button></div>
+    <button class="btn go" data-run="extract_fw" data-files="fw_files">Extract</button>
+  </div>
+</section>
+
+<section id="saves">
+  <h3>Extract savegames</h3>
+  <p class="help">Copy the <code>save</code> folder from your console's USER partition (e.g. via Hekate UMS), then pick it here.</p>
+  <div class="card">
+    <label>save folder</label>
+    <div class="row"><input type="text" id="sv_dir"><button class="btn" data-pick="folder" data-target="sv_dir">Choose…</button></div>
+    <button class="btn go" data-run="extract_saves" data-savedir="sv_dir">Extract saves</button>
+  </div>
+</section>
+
+<section id="forwarder">
+  <h3>NRO / RetroArch forwarder</h3>
+  <p class="help">Builds an installable NSP that launches a homebrew .nro (or a RetroArch core + ROM) from the SD card.</p>
+  <div class="card">
+    <label>Title name</label><input type="text" id="nf_name" value="TITLE NAME">
+    <label>Title ID</label>
+    <div class="row"><input type="text" id="nf_tid"><button class="btn" id="nf_gen">Generate</button></div>
+    <label>Author</label><input type="text" id="nf_author" value="AUTHOR">
+    <label>Version</label><input type="text" id="nf_version" value="1.0">
+    <label>Icon (256×256 JPEG)</label>
+    <div class="row"><input type="text" id="nf_icon"><button class="btn" data-pick="file" data-target="nf_icon" data-types="jpg jpeg">Choose…</button></div>
+    <div class="check"><input type="checkbox" id="nf_retro"><span>RetroArch forwarder (core + ROM)</span></div>
+    <label id="nf_nro_label">NRO path on SD</label><input type="text" id="nf_nro" value="/switch/App-Dir/App.nro">
+    <div id="nf_rom_wrap" hidden><label>ROM path on SD</label><input type="text" id="nf_rom" value="/retroarch/roms/ROMNAME.extension"></div>
+    <div class="check"><input type="checkbox" id="nf_shot"><span>Allow screenshots</span></div>
+    <div class="check"><input type="checkbox" id="nf_video"><span>Allow video capture</span></div>
+    <div class="check"><input type="checkbox" id="nf_nologo"><span>No startup logo</span></div>
+    <label>Custom logo folder (optional: NintendoLogo.png, StartupMovie.gif)</label>
+    <div class="row"><input type="text" id="nf_logo"><button class="btn" data-pick="folder" data-target="nf_logo">Choose…</button></div>
+    <button class="btn go" id="nf_go">Create forwarder</button>
+  </div>
+</section>
+
+<section id="sd">
+  <h3>SD card / FAT32</h3>
+  <p class="help">Lists external physical disks. Formatting erases the entire disk (MBR, one FAT32 partition). For 64 KiB clusters use the CLI with sudo: <code>sudo ./sak fat32 diskN --confirm diskN --cluster-64k</code>.</p>
+  <div class="card">
+    <div class="row"><button class="btn" id="sd_refresh">Refresh drives</button></div>
+    <pre id="sd_list" style="margin-top:10px">–</pre>
+  </div>
+  <div class="card danger">
+    <label>Disk identifier (whole disk, e.g. disk4)</label><input type="text" id="sd_disk">
+    <label>Volume label</label><input type="text" id="sd_label" value="SWITCH">
+    <label>Type the disk identifier again to confirm erasing it</label><input type="text" id="sd_confirm">
+    <button class="btn go" id="sd_go">Erase and format FAT32</button>
+  </div>
+</section>
+
+<section id="settings">
+  <h3>Settings & status</h3>
+  <div class="card">
+    <label>Keys file (prod.keys / keys.dat) — empty = auto (SAK_mac/keys, ~/.switch, $SAK_KEYS)</label>
+    <div class="row"><input type="text" id="st_keys"><button class="btn" data-pick="file" data-target="st_keys">Choose…</button></div>
+    <label>Output folder</label>
+    <div class="row"><input type="text" id="st_out"><button class="btn" data-pick="folder" data-target="st_out">Choose…</button></div>
+    <button class="btn go" id="st_save">Save</button>
+  </div>
+  <div class="card"><div class="status-grid" id="st_status"></div></div>
+</section>
+
+<div class="card" id="jobpanel" hidden>
+  <div class="row"><strong id="job_title" style="flex:1"></strong><span id="job_status"></span><button class="btn" id="job_cancel">Cancel</button></div>
+  <div class="bar"><div id="job_bar"></div></div>
+  <pre id="log"></pre>
+</div>
+</main>
+</div>
+<script>
+const TOKEN = "__SAK_TOKEN__";
+const $ = id => document.getElementById(id);
+async function api(path, body) {
+  const opt = { headers: { "X-SAK-Token": TOKEN } };
+  if (body !== undefined) { opt.method = "POST"; opt.body = JSON.stringify(body); opt.headers["Content-Type"] = "application/json"; }
+  const r = await fetch(path, opt);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+const lines = id => $(id).value.split("\n").map(s => s.trim()).filter(Boolean);
+
+function show(id) {
+  document.querySelectorAll("section").forEach(s => s.classList.toggle("active", s.id === id));
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("active", b.dataset.s === id));
+  try { localStorage.setItem("sak.section", id); } catch (e) {}
+}
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => show(b.dataset.s));
+
+document.querySelectorAll("[data-pick]").forEach(b => b.onclick = async () => {
+  const kind = b.dataset.pick, types = (b.dataset.types || "").split(" ").filter(Boolean);
+  const { paths } = await api("/api/pick", { kind, types, prompt: "Select for SAK" });
+  if (!paths.length) return;
+  const t = $(b.dataset.target);
+  t.value = t.tagName === "TEXTAREA" ? paths.join("\n") : paths[0];
+});
+
+let current = null, timer = null;
+async function run(op, params) {
+  try {
+    const { id } = await api("/api/run", { op, params });
+    current = id; $("jobpanel").hidden = false; $("log").textContent = ""; poll();
+  } catch (e) { alert(e.message); }
+}
+async function poll() {
+  clearTimeout(timer);
+  if (!current) return;
+  const j = await api("/api/job/" + current);
+  $("job_title").textContent = j.title;
+  $("job_status").textContent = j.status === "running" ? j.progress + "%" : j.status;
+  $("job_status").className = j.status === "error" ? "bad" : j.status === "done" ? "ok" : "";
+  $("job_bar").style.width = j.progress + "%";
+  let text = j.log.join("\n");
+  if (j.result.length) text += "\n\nOutput:\n" + j.result.join("\n");
+  if (j.error) text += "\n\nERROR: " + j.error;
+  const log = $("log"); log.textContent = text; log.scrollTop = log.scrollHeight;
+  $("job_cancel").disabled = j.status !== "running";
+  document.querySelectorAll("button.go").forEach(b => b.disabled = j.status === "running");
+  if (j.status === "running") timer = setTimeout(poll, 500);
+}
+$("job_cancel").onclick = () => current && api("/api/cancel/" + current, {});
+
+document.querySelectorAll("[data-run]").forEach(b => b.onclick = () => {
+  const p = {};
+  if (b.dataset.files) p.files = lines(b.dataset.files);
+  if (b.dataset.base) p.base = $(b.dataset.base).value.trim();
+  if (b.dataset.savedir) p.save_dir = $(b.dataset.savedir).value.trim();
+  (b.dataset.opts || "").split(",").filter(Boolean).forEach(o => {
+    const [k, id] = o.split(":"); const el = $(id);
+    p[k] = el.type === "checkbox" ? el.checked : el.value;
+  });
+  run(b.dataset.run, p);
+});
+
+$("nf_retro").onchange = () => {
+  $("nf_rom_wrap").hidden = !$("nf_retro").checked;
+  $("nf_nro_label").textContent = $("nf_retro").checked ? "RetroArch core path on SD" : "NRO path on SD";
+};
+$("nf_gen").onclick = async () => { $("nf_tid").value = (await api("/api/title-id")).title_id; };
+$("nf_go").onclick = () => run("forwarder", {
+  name: $("nf_name").value, title_id: $("nf_tid").value.trim(), author: $("nf_author").value,
+  version: $("nf_version").value, icon: $("nf_icon").value.trim(), nro: $("nf_nro").value.trim(),
+  rom: $("nf_retro").checked ? $("nf_rom").value.trim() : "", screenshot: $("nf_shot").checked,
+  video_capture: $("nf_video").checked, no_logo: $("nf_nologo").checked, logo_dir: $("nf_logo").value.trim(),
+});
+
+$("sd_refresh").onclick = async () => {
+  try {
+    const d = await api("/api/drives");
+    $("sd_list").textContent = d.length ? d.map(x => `${x.identifier}  ${x.name}  ${(x.size / 1e9).toFixed(1)} GB  ${x.mount_points.join(", ")}`).join("\n") : "no external disks";
+  } catch (e) { $("sd_list").textContent = e.message; }
+};
+$("sd_go").onclick = () => {
+  const disk = $("sd_disk").value.trim();
+  if (!confirm(`ERASE ALL DATA on ${disk}? This cannot be undone.`)) return;
+  run("fat32", { disk, label: $("sd_label").value, confirm: $("sd_confirm").value.trim() });
+};
+
+async function refreshState() {
+  const s = await api("/api/state");
+  $("ver").textContent = "macOS port " + s.version;
+  $("st_keys").value = s.keys_setting; $("st_out").value = s.out;
+  if (!$("nf_tid").value) $("nf_tid").value = s.default_title_id;
+  const row = (k, v) => `<span>${k}</span><code class="${v ? "ok" : "bad"}">${v ? v.replace(/</g, "&lt;") : "missing"}</code>`;
+  $("st_status").innerHTML = row("keys", s.keys) + Object.entries(s.tools).map(([k, v]) => row(k, v)).join("") + row("output", s.out);
+}
+$("st_save").onclick = async () => { await api("/api/settings", { keys: $("st_keys").value.trim(), out: $("st_out").value.trim() }); refreshState(); };
+
+let start = "split_xci";
+try { start = localStorage.getItem("sak.section") || start; } catch (e) {}
+show($(start) ? start : "split_xci");
+refreshState();
+</script>
+</body>
+</html>

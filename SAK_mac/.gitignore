@@ -1,0 +1,10 @@
+build/
+tools/bin/
+savex/bin/
+savex/obj/
+tools/lib/
+__pycache__/
+*.pyc
+keys/
+.venv/
+tools/nscb/
