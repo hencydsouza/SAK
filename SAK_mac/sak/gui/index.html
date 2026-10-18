@@ -76,6 +76,7 @@ pre#log { background: var(--code); border-radius: 6px; padding: 10px; max-height
   <button data-s="compress_nsp">Compress / decompress</button>
   <button data-s="patch_nsp">Patch to lower firmware</button>
   <h2>Other</h2>
+  <button data-s="extract">Extract exefs / romfs</button>
   <button data-s="saves">Extract savegames</button>
   <button data-s="forwarder">NRO forwarder</button>
   <button data-s="sd">SD card / FAT32</button>
@@ -220,6 +221,21 @@ pre#log { background: var(--code); border-radius: 6px; padding: 10px; max-height
   </div>
 </section>
 
+<section id="extract">
+  <h3>Extract exefs / romfs</h3>
+  <p class="help">Dumps the base game's program (<code>exefs/</code>: main, sdk, … NSOs) and assets (<code>romfs/</code>) from an NSP, NSZ or XCI. Needs about twice the game's size in free space while running.</p>
+  <div class="card">
+    <label>Base game NSP / NSZ / XCI</label>
+    <div class="row"><textarea id="ex_files"></textarea><button class="btn" data-pick="files" data-target="ex_files">Choose…</button></div>
+    <div class="check"><input type="checkbox" id="ex_las"><span>LASRecomp preset — require Link's Awakening v1.0.0 (no update), write an <code>extracted/</code> folder</span></div>
+    <div id="ex_las_wrap" hidden>
+      <label>LASRecomp checkout (optional — defaults to the output folder)</label>
+      <div class="row"><input type="text" id="ex_las_dir"><button class="btn" data-pick="folder" data-target="ex_las_dir">Choose…</button></div>
+    </div>
+    <button class="btn go" data-run="extract" data-files="ex_files" data-opts="lasrecomp:ex_las,lasrecomp_dir:ex_las_dir">Extract</button>
+  </div>
+</section>
+
 <section id="saves">
   <h3>Extract savegames</h3>
   <p class="help">Copy the <code>save</code> folder from your console's USER partition (e.g. via Hekate UMS), then pick it here.</p>
@@ -352,6 +368,7 @@ document.querySelectorAll("[data-run]").forEach(b => b.onclick = () => {
   run(b.dataset.run, p);
 });
 
+$("ex_las").onchange = () => { $("ex_las_wrap").hidden = !$("ex_las").checked; };
 $("nf_retro").onchange = () => {
   $("nf_rom_wrap").hidden = !$("nf_retro").checked;
   $("nf_nro_label").textContent = $("nf_retro").checked ? "RetroArch core path on SD" : "NRO path on SD";

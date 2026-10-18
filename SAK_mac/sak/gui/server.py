@@ -13,7 +13,7 @@ from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from .. import __version__, drives, forwarder, ops, split, tools
+from .. import __version__, drives, extract, forwarder, ops, split, tools
 from ..common import Cancelled, Job, SakError
 
 INDEX = Path(__file__).with_name("index.html")
@@ -76,6 +76,10 @@ OPS = {
     "decompress": ("Decompress", lambda p, o, j: _each(p["files"], lambda f: ops.decompress(f, o, j, _keys(p)))),
     "extract_fw": ("Extract firmware", lambda p, o, j: _each(p["files"], lambda f: ops.extract_firmware(f, o, j, _keys(p)))),
     "extract_saves": ("Extract saves", lambda p, o, j: [ops.extract_saves(_one(p["save_dir"]), o, j, _keys(p))]),
+    "extract": ("Extract exefs/romfs", lambda p, o, j: _each(p["files"], lambda f: str(extract.extract_title(
+        f, extract.default_dest(f, o, bool(p.get("lasrecomp")),
+                                _paths(p.get("lasrecomp_dir"))[0] if _paths(p.get("lasrecomp_dir")) else None),
+        j, _keys(p), bool(p.get("lasrecomp"))).folder))),
     "forwarder": ("NRO forwarder", lambda p, o, j: [forwarder.build(forwarder.ForwarderSpec(
         name=p.get("name", ""), author=p.get("author", "AUTHOR"), nro_path=p.get("nro", ""),
         icon=_one(p.get("icon")), rom_path=p.get("rom") or None, title_id=p.get("title_id", ""),

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 from .common import Cancelled, Job, SakError
@@ -39,6 +42,36 @@ def find_keys(explicit: str | os.PathLike | None = None) -> Path:
         "keys.dat/prod.keys missing\nPlace your prod.keys in SAK_mac/keys/ or ~/.switch/, "
         "set SAK_KEYS, or pass --keys to use this feature!"
     )
+
+
+_KEY_LINE = re.compile(r"^\s*([A-Za-z0-9_]+)\s*=\s*([0-9A-Fa-f]+)\s*$")
+
+
+@contextmanager
+def sanitized_keys(keys: Path):
+    """Yield a private temp copy of `keys` holding only well-formed lines.
+
+    hactool/hacbrewpack abort the whole keyset on one malformed value (e.g. 34-hex-digit
+    *_kek_source lines some dumpers emit), so drop lines that are not hex with a length
+    that is a multiple of 32 digits (whole AES blocks).
+    """
+    lines = []
+    for line in Path(keys).read_text(encoding="utf-8", errors="replace").splitlines():
+        m = _KEY_LINE.match(line)
+        if m and len(m.group(2)) % 32 == 0:
+            lines.append(f"{m.group(1)} = {m.group(2)}\n")
+    fd, tmp = tempfile.mkstemp(prefix="sak-keys-", suffix=".keys")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.writelines(lines)
+        yield Path(tmp)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+
+# hactool echoes every key it does not know, value included; never surface those lines.
+_SECRET_ECHO = re.compile(r"Failed to match key|must be 32 hex digits|must be \d+ hex", re.IGNORECASE)
 
 
 def find_tool(name: str) -> Path:
@@ -92,23 +125,28 @@ def run(cmd: list[str], job: Job, cwd: Path | None = None, env: dict | None = No
             *lines, buf = buf.replace(b"\r", b"\n").split(b"\n")
             for line in lines:
                 text = line.decode("utf-8", "replace").rstrip()
-                if text:
+                if text and not _SECRET_ECHO.search(text):
                     output.append(text)
                     job.log(text)
-        if buf.strip():
-            output.append(buf.decode("utf-8", "replace").rstrip())
-            job.log(output[-1])
+        tail = buf.decode("utf-8", "replace").rstrip()
+        if tail.strip() and not _SECRET_ECHO.search(tail):
+            output.append(tail)
+            job.log(tail)
 
     reader = threading.Thread(target=pump, daemon=True)
     reader.start()
-    while proc.poll() is None:
-        if job.cancelled:
-            proc.kill()
-            proc.wait()
-            reader.join(timeout=5)
-            raise Cancelled("cancelled by user")
-        reader.join(timeout=0.2)
-    reader.join()
+    try:
+        while proc.poll() is None:
+            if job.cancelled:
+                proc.kill()
+                proc.wait()
+                reader.join(timeout=5)
+                raise Cancelled("cancelled by user")
+            reader.join(timeout=0.2)
+        reader.join()
+    finally:
+        assert proc.stdout
+        proc.stdout.close()
     return proc.returncode, "\n".join(output)
 
 
