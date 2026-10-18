@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -85,6 +86,9 @@ def _lowercase_ext(path: Path, tmp: Path) -> Path:
     path = Path(path).resolve()
     if path.suffix == path.suffix.lower():
         return path
+    if sys.platform == "win32":
+        # NTFS/exFAT names are case-insensitive, and symlinks need admin rights: same file, new spelling.
+        return path.with_suffix(path.suffix.lower())
     link = tmp / (path.stem + path.suffix.lower())
     link.symlink_to(path)
     return link

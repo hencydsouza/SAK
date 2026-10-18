@@ -67,6 +67,7 @@ NSC_Builder runs from source at a pinned commit, with a small macOS patch in `sc
               --rom "/roms/snes/mario.sfc" --icon mario.jpg
 ./sak.command extract Game.nsp                       # -> ./Game/{exefs,romfs}
 ./sak.command -o ~/LASRecomp extract --lasrecomp "Links Awakening [01006BB00C6F0000][v0].nsp"
+./sak.command -o ~/TOTK extract --totk --exefs-only "TOTK [0100F2C0115B6000][v0].nsp"   # -> ~/TOTK/totk-1.0.0/exefs
 ./sak.command drives
 sudo ./sak.command fat32 disk4 --confirm disk4 --cluster-64k   # ERASES disk4
 ```
@@ -78,7 +79,8 @@ sudo ./sak.command fat32 disk4 --confirm disk4 --cluster-64k   # ERASES disk4
 - NSZ/XCZ input is decompressed first.
 - Titles that come with a ticket use its title key. Personalized tickets are rejected.
 - Update and DLC packages are refused, because their programs cannot be extracted on their own.
-- While it runs it needs about twice the game's size in free space.
+- While it runs it needs about twice the game's size in free space, or about the game's size with
+  `--exefs-only`, which skips `romfs/`.
 
 `--lasrecomp` prepares input for [LASRecomp](https://github.com/peiikai/LASRecomp):
 
@@ -88,6 +90,40 @@ sudo ./sak.command fat32 disk4 --confirm disk4 --cluster-64k   # ERASES disk4
 - It writes `<out>/extracted/{exefs,romfs}`, or into `--lasrecomp-dir`.
 
 LASRecomp lifts the NSOs to C itself, so no separate decompilation step is needed.
+
+`--totk` (`--preset totk`) prepares input for the planned
+[MacNativeGames](https://github.com/hencydsouza/MacNativeGames) Windows port of *Tears of the Kingdom*:
+
+- It requires `0100F2C0115B6000` at v0 (1.0.0, no update).
+- It requires all five ExeFS files: `main`, `main.npdm`, `rtld`, `sdk` and `subsdk0`.
+- Each file's SHA-256 must match MacNativeGames' `games/totk/assets/expected-v1.0.0.json`, so a modified or
+  wrong-version dump is refused. The RomFS is not hash-checked.
+- It writes `<out>/totk-1.0.0/{exefs,romfs}`. Add `--exefs-only` to skip the 17 GB RomFS.
+
+In the GUI, both presets are in the **Preset** menu on the "Extract exefs / romfs" page, with an "ExeFS only"
+checkbox.
+
+## Windows x64 build (new)
+
+The same code, web GUI and LASRecomp preset also ship for Windows as a zip with `SAK.exe`. `scripts/build_windows.sh` builds it **on macOS**; no Windows machine or PyInstaller is involved:
+
+| Part | Source |
+|---|---|
+| `SAK.exe` | `scripts/win/launcher.c`, cross-compiled with zig 0.14.1 (PyPI `ziglang`). It starts `python\pythonw.exe -m sak gui` and shows an error box if the server fails to start (log in `logs\sak.log`) |
+| `python\` | Official CPython 3.12.10 embeddable zip (sha256 pinned, matched against python.org's MD5 and size), plus Windows wheels pinned to the macOS venv's versions. Every `Requires-Dist` is re-checked with Windows markers |
+| `hactool.exe`, `hacbrewpack.exe` | The same pinned sources as on macOS, cross-compiled with zig (with large-file flags checked) |
+| `savex.exe` | `savex/` published for `win-x64`: self-contained, single file |
+| `guiformat.exe` | Taken unchanged from `SAK_64bit/bin` (the FAT32 formatter the original SAK shipped) |
+| NSC_Builder | Same pinned commit and patch; ctypes stand-ins for the two pywin32 calls squirrel makes (`scripts/win/shims`) |
+
+What differs on Windows:
+- **FAT32:** opens guiformat, which picks the drive and confirms the erase itself. SAK never erases a disk itself.
+- **Drives:** removable drives are listed by drive letter.
+- **Archive bit:** set with `SetFileAttributesW`.
+- **File pickers:** the native Open/Folder dialogs.
+- **squirrel:** runs through `python -m sak.squirrel_run`, because the embeddable interpreter runs in isolated mode and leaves out the script's folder.
+
+Build: `scripts/build_windows.sh` → `dist/SAK-windows-x64-<version>.zip`. Test on a Windows PC: `powershell -ExecutionPolicy Bypass -File scripts\win\smoke_test.ps1 -Sak C:\path\to\SAK`. CI (`.github/workflows/sak-windows.yml`) builds on macOS and runs that smoke test on a Windows runner.
 
 ## Keys hygiene
 

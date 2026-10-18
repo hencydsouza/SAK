@@ -227,12 +227,18 @@ pre#log { background: var(--code); border-radius: 6px; padding: 10px; max-height
   <div class="card">
     <label>Base game NSP / NSZ / XCI</label>
     <div class="row"><textarea id="ex_files"></textarea><button class="btn" data-pick="files" data-target="ex_files">Choose…</button></div>
-    <div class="check"><input type="checkbox" id="ex_las"><span>LASRecomp preset — require Link's Awakening v1.0.0 (no update), write an <code>extracted/</code> folder</span></div>
+    <label>Preset</label>
+    <select id="ex_preset">
+      <option value="">None — any base game, folder named after the file</option>
+      <option value="lasrecomp">LASRecomp — Link's Awakening v1.0.0 (no update), writes an extracted/ folder</option>
+      <option value="totk">TOTK — Tears of the Kingdom v1.0.0 (no update), ExeFS checked against MacNativeGames' hashes, writes totk-1.0.0/</option>
+    </select>
+    <div class="check"><input type="checkbox" id="ex_exefs_only"><span>ExeFS only — skip <code>romfs/</code> (TOTK's is 17 GB)</span></div>
     <div id="ex_las_wrap" hidden>
       <label>LASRecomp checkout (optional — defaults to the output folder)</label>
       <div class="row"><input type="text" id="ex_las_dir"><button class="btn" data-pick="folder" data-target="ex_las_dir">Choose…</button></div>
     </div>
-    <button class="btn go" data-run="extract" data-files="ex_files" data-opts="lasrecomp:ex_las,lasrecomp_dir:ex_las_dir">Extract</button>
+    <button class="btn go" data-run="extract" data-files="ex_files" data-opts="preset:ex_preset,exefs_only:ex_exefs_only,lasrecomp_dir:ex_las_dir">Extract</button>
   </div>
 </section>
 
@@ -271,12 +277,16 @@ pre#log { background: var(--code); border-radius: 6px; padding: 10px; max-height
 
 <section id="sd">
   <h3>SD card / FAT32</h3>
-  <p class="help">Lists external physical disks. Formatting erases the entire disk (MBR, one FAT32 partition). For 64 KiB clusters use the CLI with sudo: <code>sudo ./sak fat32 diskN --confirm diskN --cluster-64k</code>.</p>
+  <p class="help mac-only">Lists external physical disks. Formatting erases the entire disk (MBR, one FAT32 partition). For 64 KiB clusters use the CLI with sudo: <code>sudo ./sak fat32 diskN --confirm diskN --cluster-64k</code>.</p>
+  <p class="help win-only" hidden>Lists removable drives. Formatting opens the bundled FAT32 Format tool (guiformat), as SAK did: pick the SD card's drive letter there, choose 64K allocation units for the Switch, and confirm in that window.</p>
   <div class="card">
     <div class="row"><button class="btn" id="sd_refresh">Refresh drives</button></div>
     <pre id="sd_list" style="margin-top:10px">–</pre>
   </div>
-  <div class="card danger">
+  <div class="card win-only" hidden>
+    <button class="btn go" id="sd_win_go">Open FAT32 Format tool</button>
+  </div>
+  <div class="card danger mac-only">
     <label>Disk identifier (whole disk, e.g. disk4)</label><input type="text" id="sd_disk">
     <label>Volume label</label><input type="text" id="sd_label" value="SWITCH">
     <label>Type the disk identifier again to confirm erasing it</label><input type="text" id="sd_confirm">
@@ -287,7 +297,7 @@ pre#log { background: var(--code); border-radius: 6px; padding: 10px; max-height
 <section id="settings">
   <h3>Settings & status</h3>
   <div class="card">
-    <label>Keys file (prod.keys / keys.dat) — empty = auto (SAK_mac/keys, ~/.switch, $SAK_KEYS)</label>
+    <label>Keys file (prod.keys / keys.dat) — empty = auto (keys folder next to SAK, ~/.switch, $SAK_KEYS)</label>
     <div class="row"><input type="text" id="st_keys"><button class="btn" data-pick="file" data-target="st_keys">Choose…</button></div>
     <label>Output folder</label>
     <div class="row"><input type="text" id="st_out"><button class="btn" data-pick="folder" data-target="st_out">Choose…</button></div>
@@ -368,7 +378,7 @@ document.querySelectorAll("[data-run]").forEach(b => b.onclick = () => {
   run(b.dataset.run, p);
 });
 
-$("ex_las").onchange = () => { $("ex_las_wrap").hidden = !$("ex_las").checked; };
+$("ex_preset").onchange = () => { $("ex_las_wrap").hidden = $("ex_preset").value !== "lasrecomp"; };
 $("nf_retro").onchange = () => {
   $("nf_rom_wrap").hidden = !$("nf_retro").checked;
   $("nf_nro_label").textContent = $("nf_retro").checked ? "RetroArch core path on SD" : "NRO path on SD";
@@ -387,6 +397,7 @@ $("sd_refresh").onclick = async () => {
     $("sd_list").textContent = d.length ? d.map(x => `${x.identifier}  ${x.name}  ${(x.size / 1e9).toFixed(1)} GB  ${x.mount_points.join(", ")}`).join("\n") : "no external disks";
   } catch (e) { $("sd_list").textContent = e.message; }
 };
+$("sd_win_go").onclick = () => run("fat32", {});
 $("sd_go").onclick = () => {
   const disk = $("sd_disk").value.trim();
   if (!confirm(`ERASE ALL DATA on ${disk}? This cannot be undone.`)) return;
@@ -395,7 +406,10 @@ $("sd_go").onclick = () => {
 
 async function refreshState() {
   const s = await api("/api/state");
-  $("ver").textContent = "macOS port " + s.version;
+  const win = s.platform === "windows";
+  $("ver").textContent = (win ? "Windows port " : "macOS port ") + s.version;
+  document.querySelectorAll(".mac-only").forEach(e => e.hidden = win);
+  document.querySelectorAll(".win-only").forEach(e => e.hidden = !win);
   $("st_keys").value = s.keys_setting; $("st_out").value = s.out;
   if (!$("nf_tid").value) $("nf_tid").value = s.default_title_id;
   const row = (k, v) => `<span>${k}</span><code class="${v ? "ok" : "bad"}">${v ? v.replace(/</g, "&lt;") : "missing"}</code>`;

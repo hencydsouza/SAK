@@ -32,7 +32,7 @@ def _each(paths, fn):
 
 def cmd_doctor(a, job):
     ok = True
-    for name in ("hactool", "hacbrewpack", "savex"):
+    for name in tools.NATIVE_TOOLS:
         try:
             print(f"[ok]      {name}: {tools.find_tool(name)}")
         except SakError as e:
@@ -98,9 +98,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add("extract", "extract exefs/ + romfs/ of a base game (NSP/NSZ/XCI)", lambda a, j: _each(
         a.files, lambda f: str(extract.extract_title(
-            f, extract.default_dest(f, out(a), a.lasrecomp, a.lasrecomp_dir), j, k(a), a.lasrecomp).folder)))
-    sp.add_argument("--lasrecomp", action="store_true",
-                    help="LASRecomp preset: require Link's Awakening v1.0.0, write <out>/extracted")
+            f, extract.default_dest(f, out(a), a.preset, a.lasrecomp_dir), j, k(a), a.preset, a.exefs_only).folder)))
+    sp.add_argument("--preset", choices=sorted(extract.PRESETS),
+                    help="lasrecomp: Link's Awakening v1.0.0 -> <out>/extracted; "
+                         "totk: Tears of the Kingdom v1.0.0, ExeFS hash-checked -> <out>/totk-1.0.0")
+    sp.add_argument("--lasrecomp", dest="preset", action="store_const", const="lasrecomp",
+                    help="same as --preset lasrecomp")
+    sp.add_argument("--totk", dest="preset", action="store_const", const="totk", help="same as --preset totk")
+    sp.add_argument("--exefs-only", action="store_true", help="skip romfs/ (TOTK's is 17 GB)")
     sp.add_argument("--lasrecomp-dir", type=Path, help="LASRecomp checkout to write extracted/ into")
 
     sp = add("forwarder", "build an NRO / RetroArch forwarder NSP", lambda a, j: [forwarder.build(
@@ -128,9 +133,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add("fat32", "ERASE an external disk and format it FAT32", lambda a, j: drives.format_fat32(
         a.disk, a.label, j, a.confirm, a.cluster_64k) or [], files=False)
-    sp.add_argument("disk", help="whole-disk identifier, e.g. disk4 (see `sak drives`)")
+    windows = sys.platform == "win32"  # Windows opens guiformat, which picks the drive and confirms itself
+    sp.add_argument("disk", nargs="?" if windows else None, default="",
+                    help="whole-disk identifier, e.g. disk4 (see `sak drives`); unused on Windows")
     sp.add_argument("--label", default="SWITCH")
-    sp.add_argument("--confirm", required=True, help="repeat the disk identifier to confirm erasing it")
+    sp.add_argument("--confirm", required=not windows, default="",
+                    help="repeat the disk identifier to confirm erasing it")
     sp.add_argument("--cluster-64k", action="store_true", help="64 KiB clusters (needs sudo)")
 
     sp = add("gui", "start the web GUI", lambda a, j: __import__("sak.gui.server", fromlist=["serve"]).serve(

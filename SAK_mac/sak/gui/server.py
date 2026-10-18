@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import secrets
 import subprocess
+import sys
 import threading
 import traceback
 import uuid
@@ -77,9 +79,9 @@ OPS = {
     "extract_fw": ("Extract firmware", lambda p, o, j: _each(p["files"], lambda f: ops.extract_firmware(f, o, j, _keys(p)))),
     "extract_saves": ("Extract saves", lambda p, o, j: [ops.extract_saves(_one(p["save_dir"]), o, j, _keys(p))]),
     "extract": ("Extract exefs/romfs", lambda p, o, j: _each(p["files"], lambda f: str(extract.extract_title(
-        f, extract.default_dest(f, o, bool(p.get("lasrecomp")),
+        f, extract.default_dest(f, o, p.get("preset") or None,
                                 _paths(p.get("lasrecomp_dir"))[0] if _paths(p.get("lasrecomp_dir")) else None),
-        j, _keys(p), bool(p.get("lasrecomp"))).folder))),
+        j, _keys(p), p.get("preset") or None, bool(p.get("exefs_only"))).folder))),
     "forwarder": ("NRO forwarder", lambda p, o, j: [forwarder.build(forwarder.ForwarderSpec(
         name=p.get("name", ""), author=p.get("author", "AUTHOR"), nro_path=p.get("nro", ""),
         icon=_one(p.get("icon")), rom_path=p.get("rom") or None, title_id=p.get("title_id", ""),
@@ -112,6 +114,36 @@ def _osascript_pick(kind: str, prompt: str, types: list[str]) -> list[str]:
     return [line for line in res.stdout.splitlines() if line.strip()]
 
 
+def _windows_pick(kind: str, prompt: str, types: list[str]) -> list[str]:
+    """Native Open/Folder dialogs through PowerShell + WinForms (no extra Python packages)."""
+    title = prompt.replace("'", "''")
+    owner = "$o = New-Object System.Windows.Forms.Form -Property @{TopMost=$true; ShowInTaskbar=$false}"
+    if kind == "folder":
+        body = (f"$d = New-Object System.Windows.Forms.FolderBrowserDialog -Property @{{Description='{title}'; "
+                "ShowNewFolderButton=$true}\nif ($d.ShowDialog($o) -eq 'OK') { $d.SelectedPath }")
+    else:
+        exts = [t for t in types if t.isalnum()]
+        pattern = ";".join(f"*.{t}" for t in exts)
+        flt = (f"{'/'.join(e.upper() for e in exts)} files|{pattern}|" if exts else "") + "All files|*.*"
+        multi = "$true" if kind == "files" else "$false"
+        body = (f"$d = New-Object System.Windows.Forms.OpenFileDialog -Property @{{Title='{title}'; "
+                f"Filter='{flt}'; Multiselect={multi}}}\nif ($d.ShowDialog($o) -eq 'OK') {{ $d.FileNames }}")
+    script = ("[Console]::OutputEncoding = [Text.Encoding]::UTF8\nAdd-Type -AssemblyName System.Windows.Forms\n"
+              f"{owner}\n{body}")
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode()
+    res = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-STA", "-NonInteractive", "-EncodedCommand", encoded],
+        capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    if res.returncode != 0:
+        return []
+    return [line.strip() for line in res.stdout.decode("utf-8", "replace").splitlines() if line.strip()]
+
+
+def pick(kind: str, prompt: str, types: list[str]) -> list[str]:
+    return (_windows_pick if sys.platform == "win32" else _osascript_pick)(kind, prompt, types)
+
+
 class App:
     def __init__(self, keys: str | None, out: str):
         self.token = secrets.token_urlsafe(24)
@@ -122,7 +154,7 @@ class App:
 
     def state(self) -> dict:
         status = {}
-        for name in ("hactool", "hacbrewpack", "savex"):
+        for name in tools.NATIVE_TOOLS:
             try:
                 status[name] = str(tools.find_tool(name))
             except SakError:
@@ -135,7 +167,7 @@ class App:
             keys = str(tools.find_keys(self.keys or None))
         except SakError:
             keys = None
-        return {"version": __version__, "tools": status, "keys": keys, "keys_setting": self.keys,
+        return {"version": __version__, "platform": "windows" if sys.platform == "win32" else "macos", "tools": status, "keys": keys, "keys_setting": self.keys,
                 "out": self.out, "default_title_id": forwarder.DEFAULT_TITLE_ID}
 
     def start(self, op: str, params: dict) -> JobState:
@@ -233,7 +265,7 @@ def make_handler(app: App, port_ref: list[int]):
                         job.job.cancel_event.set()
                     return self._send(200, {"ok": bool(job)})
                 if self.path == "/api/pick":
-                    return self._send(200, {"paths": _osascript_pick(
+                    return self._send(200, {"paths": pick(
                         body.get("kind", "file"), body.get("prompt", "Select"), body.get("types", []))})
                 if self.path == "/api/settings":
                     if "keys" in body:

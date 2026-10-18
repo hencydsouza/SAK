@@ -1,0 +1,52 @@
+name: SAK Windows build
+
+# Builds the Windows x64 zip on macOS (scripts/build_windows.sh cross-compiles everything),
+# then unpacks and smoke-tests it on a real Windows runner. No keys or game files are used.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "SAK_mac/**"
+      - ".github/workflows/sak-windows.yml"
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: NSC_Builder (pinned + patched)
+        run: SAK_mac/scripts/setup_python_tools.sh
+      - name: Build Windows zip
+        run: SAK_mac/scripts/build_windows.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SAK-windows-x64
+          path: SAK_mac/dist/SAK-windows-x64-*.zip
+          if-no-files-found: error
+
+  smoke-test:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            SAK_mac/tests
+            SAK_mac/scripts/win
+      - uses: actions/download-artifact@v4
+        with:
+          name: SAK-windows-x64
+      - name: Unpack
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem SAK-windows-x64-*.zip | Select-Object -First 1
+          Expand-Archive $zip.FullName -DestinationPath unpacked
+      - name: Smoke test
+        shell: pwsh
+        run: ./SAK_mac/scripts/win/smoke_test.ps1 -Sak unpacked/SAK -Tests SAK_mac/tests

@@ -3,13 +3,17 @@
 Pipeline: container index (PFS0, or the XCI's secure HFS0) -> copy + decrypt the CNMT with
 hactool -> pick the Program NCA (+ ticket title key) -> hactool --exefsdir/--romfsdir.
 
-The LASRecomp preset (https://github.com/peiikai/LASRecomp) additionally insists on
-The Legend of Zelda: Link's Awakening v1.0.0 base (no update) and writes the folder it loads:
-  <dir>/extracted/exefs/{main,sdk,...}   <dir>/extracted/romfs/...
+Presets check that the dump is the exact base game a project expects, then write its folder:
+  lasrecomp  Link's Awakening v1.0.0 for LASRecomp (https://github.com/peiikai/LASRecomp):
+             main's build id must match its launcher; writes <dir>/extracted/{exefs,romfs}
+  totk       Tears of the Kingdom v1.0.0 for the MacNativeGames Windows port: every ExeFS file
+             must match MacNativeGames' games/totk/assets/expected-v1.0.0.json; writes
+             <dir>/totk-1.0.0/{exefs,romfs}
 """
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import struct
 import tempfile
@@ -22,6 +26,16 @@ from .common import Job, SakError, ensure_free_space
 LA_TITLE_ID = "01006BB00C6F0000"
 # First 8 bytes of exefs/main's build id that LASRecomp's launcher accepts (runtime/ui/launcher.mm).
 LA_V100_BUILD_ID_PREFIX = "ae16f71e002af8cb"
+TOTK_TITLE_ID = "0100F2C0115B6000"
+# SHA-256 of the v1.0.0 ExeFS (hashes only, no game data), copied from MacNativeGames
+# games/totk/assets/expected-v1.0.0.json (MIT); its importer checks NSP and XCI dumps against them.
+TOTK_V100_EXEFS_SHA256 = {
+    "main": "faf81f8a609ff61a6322d04948132b5929af9f6e2398e0e0ebbe819b8ba3eaab",
+    "main.npdm": "f5a5eecc49bbc31d6508c72f2e702fa9dcf2911efcc458d45963f1bdc2722485",
+    "rtld": "28317605926caa40a5cbee3e3cb290c65783b4d9f8c3697b43ca41ab2866a44d",
+    "sdk": "91573d4444d0dcd07080db78fece2b098b76080d77cdb2e1d301a2a41d7c4eea",
+    "subsdk0": "9d04c98997977e99c12a48a2dbfd3064b8da96b5152e0119064957a43f6c3f99",
+}
 META_TYPES = {0x80: "Application", 0x81: "Patch", 0x82: "AddOnContent"}
 CONTENT_PROGRAM = 1
 
@@ -43,6 +57,41 @@ class ContentMeta:
     @property
     def type_name(self) -> str:
         return META_TYPES.get(self.meta_type, hex(self.meta_type))
+
+
+@dataclass(frozen=True)
+class Preset:
+    label: str
+    game: str
+    title_id: str
+    folder: str  # created under the output (or LASRecomp) folder
+    required: tuple[str, ...]  # ExeFS files that must be present
+    build_id_prefix: str = ""
+    exefs_sha256: dict[str, str] = field(default_factory=dict)
+
+
+PRESETS = {
+    "lasrecomp": Preset("LASRecomp", "Link's Awakening", LA_TITLE_ID, "extracted", ("main", "sdk"),
+                        build_id_prefix=LA_V100_BUILD_ID_PREFIX),
+    "totk": Preset("TOTK", "Tears of the Kingdom", TOTK_TITLE_ID, "totk-1.0.0", tuple(TOTK_V100_EXEFS_SHA256),
+                   exefs_sha256=TOTK_V100_EXEFS_SHA256),
+}
+
+
+def _preset(name: str | None) -> Preset | None:
+    if not name:
+        return None
+    if name not in PRESETS:
+        raise SakError(f"unknown preset {name!r} (choose from {', '.join(PRESETS)})")
+    return PRESETS[name]
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 @dataclass
@@ -160,8 +209,9 @@ def _read_meta(container: Path, entries: dict[str, Entry], tmp: Path, keys: Path
 
 
 def extract_title(src: Path, dest: Path, job: Job, keys: Path | None = None,
-                  lasrecomp: bool = False) -> ExtractResult:
-    """Extract exefs/ and romfs/ of the base application in `src` into `dest`."""
+                  preset: str | None = None, exefs_only: bool = False) -> ExtractResult:
+    """Extract exefs/ (and romfs/ unless exefs_only) of the base application in `src` into `dest`."""
+    pre = _preset(preset)
     src = Path(src).resolve()
     dest = Path(dest).resolve()
     if not src.is_file():
@@ -178,7 +228,7 @@ def extract_title(src: Path, dest: Path, job: Job, keys: Path | None = None,
         with tempfile.TemporaryDirectory(prefix="sak-unz-", dir=dest.parent) as tmp:
             job.log("compressed input - decompressing first")
             plain = ops.decompress(src, Path(tmp), job, keys)[0]
-            return extract_title(plain, dest, job, keys, lasrecomp)
+            return extract_title(plain, dest, job, keys, preset, exefs_only)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     hactool = tools.find_tool("hactool")
@@ -189,11 +239,11 @@ def extract_title(src: Path, dest: Path, job: Job, keys: Path | None = None,
         job.log(f"title {meta.title_id} v{meta.version} ({meta.type_name})")
         if meta.meta_type != 0x80:
             raise SakError(f"{meta.type_name} content can't be extracted on its own - use the base game")
-        if lasrecomp:
-            if meta.title_id != LA_TITLE_ID:
-                raise SakError(f"LASRecomp needs Link's Awakening ({LA_TITLE_ID}), this is {meta.title_id}")
+        if pre:
+            if meta.title_id != pre.title_id:
+                raise SakError(f"{pre.label} preset needs {pre.game} ({pre.title_id}), this is {meta.title_id}")
             if meta.version != 0:
-                raise SakError(f"LASRecomp needs v1.0.0 without updates, this is v{meta.version}")
+                raise SakError(f"{pre.label} preset needs v1.0.0 without updates, this is v{meta.version}")
         programs = sorted(meta.programs, key=lambda p: p[1])
         if not programs:
             raise SakError("no Program NCA listed in the CNMT")
@@ -201,7 +251,8 @@ def extract_title(src: Path, dest: Path, job: Job, keys: Path | None = None,
         if nca_name not in entries:
             raise SakError(f"Program NCA {nca_name} missing from the container")
         program = entries[nca_name]
-        ensure_free_space(dest.parent, program.size * 2, "Extraction")
+        # the Program NCA is copied out first; the extracted romfs needs about as much again
+        ensure_free_space(dest.parent, program.size * (1 if exefs_only else 2), "Extraction")
 
         cmd = [str(hactool), "-k", str(clean)]
         tid = meta.title_id.lower()
@@ -218,19 +269,31 @@ def extract_title(src: Path, dest: Path, job: Job, keys: Path | None = None,
         nca = copy_entry(src, program, tmp / nca_name, job)
         work = tmp / "out"
         work.mkdir()  # hactool creates the exefs/romfs dirs but not their parent
-        cmd += [f"--exefsdir={work / 'exefs'}", f"--romfsdir={work / 'romfs'}", str(nca)]
-        job.log("extracting exefs + romfs (this takes a while for big games)")
+        cmd.append(f"--exefsdir={work / 'exefs'}")
+        if not exefs_only:
+            cmd.append(f"--romfsdir={work / 'romfs'}")
+        cmd.append(str(nca))
+        job.log("extracting exefs" if exefs_only else "extracting exefs + romfs (this takes a while for big games)")
         code, _ = tools.run(cmd, job)
         nca.unlink()
         main = work / "exefs" / "main"
         if not main.is_file():
             raise SakError(f"hactool extracted no exefs/main (exit {code}) - are the prod.keys correct?")
-        if lasrecomp and not (work / "exefs" / "sdk").is_file():
-            raise SakError("exefs/sdk missing - LASRecomp needs both main and sdk")
         build_id = nso_build_id(main)
-        if lasrecomp and not build_id.startswith(LA_V100_BUILD_ID_PREFIX):
-            raise SakError(f"exefs/main build id {build_id[:16]} is not Link's Awakening v1.0.0 "
-                           f"({LA_V100_BUILD_ID_PREFIX}) - LASRecomp will reject it")
+        if pre:
+            missing = [n for n in pre.required if not (work / "exefs" / n).is_file()]
+            if missing:
+                raise SakError(f"exefs/{', exefs/'.join(missing)} missing - the {pre.label} preset needs "
+                               f"{', '.join(pre.required)}")
+            if pre.build_id_prefix and not build_id.startswith(pre.build_id_prefix):
+                raise SakError(f"exefs/main build id {build_id[:16]} is not {pre.game} v1.0.0 "
+                               f"({pre.build_id_prefix}) - {pre.label} will reject it")
+            wrong = [n for n, h in pre.exefs_sha256.items() if _sha256(work / "exefs" / n) != h]
+            if wrong:
+                raise SakError(f"{', '.join(wrong)} do not match {pre.game} v1.0.0 (SHA-256) - "
+                               "not an unmodified v1.0.0 base dump")
+            if pre.exefs_sha256:
+                job.log(f"all {len(pre.exefs_sha256)} exefs files match {pre.game} v1.0.0 (SHA-256)")
         exefs_files = sorted(p.name for p in (work / "exefs").iterdir())
         if dest.exists():
             dest.rmdir()
@@ -241,7 +304,9 @@ def extract_title(src: Path, dest: Path, job: Job, keys: Path | None = None,
     return ExtractResult(dest, meta.title_id, meta.version, build_id, exefs_files)
 
 
-def default_dest(src: Path, out_dir: Path, lasrecomp: bool, lasrecomp_dir: Path | None = None) -> Path:
-    if lasrecomp:
-        return Path(lasrecomp_dir or out_dir) / "extracted"
-    return Path(out_dir) / Path(src).stem
+def default_dest(src: Path, out_dir: Path, preset: str | None, lasrecomp_dir: Path | None = None) -> Path:
+    pre = _preset(preset)
+    if pre is None:
+        return Path(out_dir) / Path(src).stem
+    base = lasrecomp_dir if preset == "lasrecomp" and lasrecomp_dir else out_dir
+    return Path(base) / pre.folder

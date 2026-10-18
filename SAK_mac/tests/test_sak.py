@@ -318,7 +318,7 @@ META_ID = "bb" * 16
 
 class ExtractTests(Tmp):
     def fake_hactool(self, title_id=0x01006BB00C6F0000, version=0, meta_type=0x80,
-                     build_id="ae16f71e002af8cb" + "00" * 24, with_sdk=True):
+                     build_id="ae16f71e002af8cb" + "00" * 24, with_sdk=True, extra_exefs=None):
         cnmt = self.tmp / "fake.cnmt"
         cnmt.write_bytes(build_cnmt(title_id, version, meta_type, [(PROG_ID, 1), (META_ID, 0)]))
         log = self.tmp / "hactool.json"
@@ -335,6 +335,8 @@ if "--exefsdir" in opt:
     e = pathlib.Path(opt["--exefsdir"]); e.mkdir()
     (e / "main").write_bytes(b"NSO0" + b"\\0" * 0x3C + bytes.fromhex({build_id!r}))
     if {with_sdk!r}: (e / "sdk").write_bytes(b"NSO0")
+    for n, data in {extra_exefs or {}!r}.items(): (e / n).write_bytes(data)
+if "--romfsdir" in opt:
     r = pathlib.Path(opt["--romfsdir"]); r.mkdir(); (r / "a.bin").write_bytes(b"x")
 """)
         return exe, log
@@ -377,7 +379,8 @@ if "--exefsdir" in opt:
     def test_sanitized_keys_drop_malformed_and_cleanup(self):
         with tools.sanitized_keys(self.keys()) as clean:
             text = clean.read_text()
-            self.assertEqual(oct(clean.stat().st_mode & 0o777), "0o600")
+            if sys.platform != "win32":  # Windows has no POSIX modes; %TEMP% is private to the user there
+                self.assertEqual(oct(clean.stat().st_mode & 0o777), "0o600")
         self.assertIn("good_key", text)
         self.assertNotIn("bad_kek_source", text)
         self.assertFalse(clean.exists())
@@ -389,7 +392,8 @@ if "--exefsdir" in opt:
         lines = []
         job = Job(on_log=lines.append)
         with mock.patch.dict(os.environ, {"SAK_HACTOOL": str(exe)}):
-            res = extract.extract_title(self.nsp(), extract.default_dest(self.tmp / "game.nsp", out, True), job, keys, True)
+            res = extract.extract_title(self.nsp(), extract.default_dest(self.tmp / "game.nsp", out, "lasrecomp"),
+                                        job, keys, "lasrecomp")
         self.assertEqual(res.folder, (out / "extracted").resolve())
         self.assertEqual(sorted(p.name for p in res.folder.iterdir()), ["exefs", "romfs"])
         self.assertEqual(res.exefs_files, ["main", "sdk"])
@@ -406,7 +410,49 @@ if "--exefsdir" in opt:
                         (dict(build_id="11" * 32), "build id"), (dict(with_sdk=False), "sdk")]:
             exe, _ = self.fake_hactool(**kw)
             with mock.patch.dict(os.environ, {"SAK_HACTOOL": str(exe)}), self.assertRaisesRegex(SakError, msg):
-                extract.extract_title(self.nsp(), self.tmp / f"o{len(msg)}" / "extracted", Job(), self.keys(), True)
+                extract.extract_title(self.nsp(), self.tmp / f"o{len(msg)}" / "extracted", Job(), self.keys(),
+                                      "lasrecomp")
+
+    TOTK_TID = 0x0100F2C0115B6000
+    TOTK_FILES = {"main.npdm": b"META", "rtld": b"NSO0rtld", "subsdk0": b"NSO0sub"}
+
+    def totk_hashes(self, build_id="ae16f71e002af8cb" + "00" * 24):
+        import hashlib
+
+        files = {"main": b"NSO0" + b"\0" * 0x3C + bytes.fromhex(build_id), "sdk": b"NSO0", **self.TOTK_FILES}
+        return {n: hashlib.sha256(d).hexdigest() for n, d in files.items()}
+
+    def test_totk_preset_checks_exefs_hashes_and_skips_romfs(self):
+        exe, log = self.fake_hactool(title_id=self.TOTK_TID, extra_exefs=self.TOTK_FILES)
+        out = self.tmp / "out"
+        lines = []
+        with mock.patch.dict(os.environ, {"SAK_HACTOOL": str(exe)}), \
+                mock.patch.dict(extract.TOTK_V100_EXEFS_SHA256, self.totk_hashes(), clear=True):
+            res = extract.extract_title(self.nsp(), extract.default_dest(self.tmp / "game.nsp", out, "totk"),
+                                        Job(on_log=lines.append), self.keys(), "totk", exefs_only=True)
+        self.assertEqual(res.folder, (out / "totk-1.0.0").resolve())
+        self.assertEqual([p.name for p in res.folder.iterdir()], ["exefs"])  # no romfs
+        self.assertEqual(res.exefs_files, ["main", "main.npdm", "rtld", "sdk", "subsdk0"])
+        self.assertTrue(any("all 5 exefs files match" in l for l in lines))
+        extract_call = json.loads(log.read_text().splitlines()[-1])
+        self.assertFalse(any(a.startswith("--romfsdir=") for a in extract_call))
+
+    def test_totk_preset_rejects_wrong_title_version_files_and_hash(self):
+        good = self.totk_hashes()
+        cases = [
+            (dict(title_id=0x01006BB00C6F0000, extra_exefs=self.TOTK_FILES), good, "Tears of the Kingdom"),
+            (dict(title_id=self.TOTK_TID, version=65536, extra_exefs=self.TOTK_FILES), good, "v1.0.0 without updates"),
+            (dict(title_id=self.TOTK_TID, extra_exefs={"rtld": b"NSO0rtld"}), good, "subsdk0"),
+            (dict(title_id=self.TOTK_TID, extra_exefs={**self.TOTK_FILES, "subsdk0": b"modified"}), good,
+             "subsdk0 do not match"),
+        ]
+        for i, (kw, hashes, msg) in enumerate(cases):
+            exe, _ = self.fake_hactool(**kw)
+            with mock.patch.dict(os.environ, {"SAK_HACTOOL": str(exe)}), \
+                    mock.patch.dict(extract.TOTK_V100_EXEFS_SHA256, hashes, clear=True), \
+                    self.assertRaisesRegex(SakError, msg):
+                extract.extract_title(self.nsp(), self.tmp / f"t{i}" / "totk-1.0.0", Job(), self.keys(), "totk")
+            self.assertFalse((self.tmp / f"t{i}" / "totk-1.0.0").exists())  # nothing left behind
 
     def test_generic_refuses_patch_and_uses_ticket(self):
         exe, _ = self.fake_hactool(meta_type=0x81)
@@ -456,6 +502,139 @@ class GuiTests(unittest.TestCase):
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+
+class FakeKernel32:
+    """Stand-in for ctypes.windll.kernel32 (drive letters, volume info, file attributes)."""
+
+    def __init__(self, drives=None):
+        self.drives = drives or {}  # letter -> (drive_type, label, fs)
+        self.attrs = {}
+        # plain functions, so code under test can set .restype as on real WinDLL functions
+        self.GetFileAttributesW = lambda path: self.attrs.get(path, 0x10)
+
+    def GetLogicalDrives(self):
+        return sum(1 << (ord(l) - 65) for l in self.drives)
+
+    def GetDriveTypeW(self, root):
+        return self.drives[root[0]][0]
+
+    def GetVolumeInformationW(self, root, label, n1, serial, maxlen, flags, fs, n2):
+        _, lab, fsname = self.drives[root[0]]
+        label.value, fs.value = lab, fsname
+        return 1
+
+    def SetFileAttributesW(self, path, attrs):
+        self.attrs[path] = attrs
+        return 1
+
+
+class WindowsLogicTests(Tmp):
+    """Windows-only branches, exercised on any host with the platform checks patched."""
+
+    def test_find_tool_uses_exe_suffix(self):
+        write_exe(self.tmp / "hactool.exe", "")
+        with mock.patch.multiple(tools, WINDOWS=True, EXE=".exe", TOOLS_BIN=self.tmp), \
+                mock.patch.dict(os.environ, {"SAK_HACTOOL": ""}), mock.patch("shutil.which", return_value=None):
+            self.assertEqual(tools.find_tool("hactool"), self.tmp / "hactool.exe")
+            with self.assertRaisesRegex(SakError, "re-extract the SAK zip"):
+                tools.find_tool("savex")
+
+    def test_squirrel_cmd_uses_console_python_and_runner(self):
+        script = self.tmp / "squirrel.py"
+        script.write_text("")
+        with mock.patch.multiple(tools, WINDOWS=True, VENV_PYTHON=self.tmp / "none.exe"), \
+                mock.patch.dict(os.environ, {"SAK_SQUIRREL": str(script)}), \
+                mock.patch.object(sys, "executable", "C:/SAK/python/pythonw.exe"):
+            cmd = tools.squirrel_cmd()
+        self.assertTrue(cmd[0].endswith("python.exe") and not cmd[0].endswith("pythonw.exe"))
+        self.assertEqual(cmd[1:], ["-W", "ignore::SyntaxWarning", "-m", "sak.squirrel_run", str(script)])
+
+    def test_squirrel_runner_restores_script_dir_under_isolated_mode(self):
+        (self.tmp / "helper_mod.py").write_text("VALUE = 'sibling import ok'\n")
+        (self.tmp / "squirrel.py").write_text(
+            "import sys, helper_mod\nprint(helper_mod.VALUE, sys.argv[1:], __name__)\n")
+        root = Path(__file__).resolve().parent.parent
+        code = (f"import sys, runpy; sys.path.insert(0, {str(root)!r}); "
+                f"sys.argv = ['x', {str(self.tmp / 'squirrel.py')!r}, '-o', 'a b']; "
+                "runpy.run_module('sak.squirrel_run', run_name='__main__')")
+        import subprocess
+        res = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("sibling import ok ['-o', 'a b'] __main__", res.stdout)
+
+    def test_windows_file_picker_script(self):
+        import base64
+        import subprocess
+
+        from sak.gui import server
+
+        out = mock.Mock(returncode=0, stdout="C:\\Games\\A.xci\r\nD:\\B b.xci\r\n".encode())
+        with mock.patch.object(subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True), \
+                mock.patch.object(server.subprocess, "run", return_value=out) as run:
+            paths = server._windows_pick("files", "Select the XCI's", ["xci"])
+        self.assertEqual(paths, ["C:\\Games\\A.xci", "D:\\B b.xci"])
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:4], ["powershell.exe", "-NoProfile", "-STA", "-NonInteractive"])
+        script = base64.b64decode(argv[-1]).decode("utf-16-le")
+        self.assertIn("OpenFileDialog", script)
+        self.assertIn("Title='Select the XCI''s'", script)  # PowerShell single-quote escaping
+        self.assertIn("Filter='XCI files|*.xci|All files|*.*'", script)
+        self.assertIn("Multiselect=$true", script)
+        with mock.patch.object(subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True), \
+                mock.patch.object(server.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=b"C:\\Out\r\n")) as run:
+            self.assertEqual(server._windows_pick("folder", "Output", []), ["C:\\Out"])
+        self.assertIn("FolderBrowserDialog", base64.b64decode(run.call_args.args[0][-1]).decode("utf-16-le"))
+
+    def test_removable_drives_listing(self):
+        import ctypes
+
+        from sak import drives
+
+        k32 = FakeKernel32({"C": (3, "System", "NTFS"), "E": (2, "SWITCH", "FAT32"), "F": (2, "", "exFAT")})
+        usage = mock.Mock(total=64 * 10**9)
+        with mock.patch.object(ctypes, "windll", mock.Mock(kernel32=k32), create=True), \
+                mock.patch.object(drives, "WINDOWS", True), mock.patch("shutil.disk_usage", return_value=usage):
+            found = drives.external_disks()
+        self.assertEqual([(d.identifier, d.name, d.mount_points) for d in found],
+                         [("E:", "SWITCH (FAT32)", ["E:\\"]), ("F:", "Removable (exFAT)", ["F:\\"])])
+
+    def test_fat32_opens_guiformat_and_never_erases(self):
+        from sak import drives
+
+        logs = []
+        with mock.patch.object(drives, "WINDOWS", True), \
+                mock.patch.object(drives, "find_tool", return_value=Path("C:/SAK/tools/bin/guiformat.exe")), \
+                mock.patch.object(drives.subprocess, "Popen") as popen, \
+                mock.patch.object(drives, "run") as run:
+            drives.format_fat32("", "SWITCH", Job(on_log=logs.append), "")
+        popen.assert_called_once()
+        run.assert_not_called()  # no diskutil / erase from our side on Windows
+        self.assertIn("guiformat.exe", logs[0])
+
+    def test_archive_bit_sets_attribute(self):
+        import ctypes
+
+        k32 = FakeKernel32()
+        with mock.patch.object(ctypes, "windll", mock.Mock(kernel32=k32), create=True), \
+                mock.patch.object(split.sys, "platform", "win32"):
+            self.assertTrue(split.set_archive_bit(self.tmp / "Game_splitted.nsp"))
+        self.assertEqual(k32.attrs[str(self.tmp / "Game_splitted.nsp")], 0x10 | 0x20)
+
+    def test_uppercase_extension_without_symlink(self):
+        game = self.tmp / "Game.NSP"
+        game.write_bytes(b"x")
+        with mock.patch.object(ops.sys, "platform", "win32"):
+            spelled = ops._lowercase_ext(game, self.tmp / "work")
+        self.assertEqual(spelled.name, "Game.nsp")
+        self.assertFalse((self.tmp / "work").exists())
+
+    def test_fat32_cli_args_optional_on_windows(self):
+        from sak import cli
+
+        with mock.patch.object(cli.sys, "platform", "win32"), mock.patch.object(cli.drives, "format_fat32") as fmt:
+            self.assertEqual(cli.main(["fat32"]), 0)
+        fmt.assert_called_once()
 
 
 if __name__ == "__main__":
