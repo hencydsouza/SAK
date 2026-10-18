@@ -377,7 +377,8 @@ if "--exefsdir" in opt:
     def test_sanitized_keys_drop_malformed_and_cleanup(self):
         with tools.sanitized_keys(self.keys()) as clean:
             text = clean.read_text()
-            self.assertEqual(oct(clean.stat().st_mode & 0o777), "0o600")
+            if sys.platform != "win32":  # Windows has no POSIX modes; %TEMP% is private to the user there
+                self.assertEqual(oct(clean.stat().st_mode & 0o777), "0o600")
         self.assertIn("good_key", text)
         self.assertNotIn("bad_kek_source", text)
         self.assertFalse(clean.exists())
