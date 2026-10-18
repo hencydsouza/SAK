@@ -19,6 +19,7 @@ Command line
     sak.cmd doctor                      check keys and tools
     sak.cmd split-xci "D:\Game.xci"
     sak.cmd -o C:\LASRecomp extract --lasrecomp "D:\Link's Awakening [v0].nsp"
+    sak.cmd -o D:\TOTK extract --totk --exefs-only "D:\TOTK [0100F2C0115B6000][v0].nsp"
     sak.cmd --help                      all commands
 
 Notes

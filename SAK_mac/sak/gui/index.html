@@ -227,12 +227,18 @@ pre#log { background: var(--code); border-radius: 6px; padding: 10px; max-height
   <div class="card">
     <label>Base game NSP / NSZ / XCI</label>
     <div class="row"><textarea id="ex_files"></textarea><button class="btn" data-pick="files" data-target="ex_files">Choose…</button></div>
-    <div class="check"><input type="checkbox" id="ex_las"><span>LASRecomp preset — require Link's Awakening v1.0.0 (no update), write an <code>extracted/</code> folder</span></div>
+    <label>Preset</label>
+    <select id="ex_preset">
+      <option value="">None — any base game, folder named after the file</option>
+      <option value="lasrecomp">LASRecomp — Link's Awakening v1.0.0 (no update), writes an extracted/ folder</option>
+      <option value="totk">TOTK — Tears of the Kingdom v1.0.0 (no update), ExeFS checked against MacNativeGames' hashes, writes totk-1.0.0/</option>
+    </select>
+    <div class="check"><input type="checkbox" id="ex_exefs_only"><span>ExeFS only — skip <code>romfs/</code> (TOTK's is 17 GB)</span></div>
     <div id="ex_las_wrap" hidden>
       <label>LASRecomp checkout (optional — defaults to the output folder)</label>
       <div class="row"><input type="text" id="ex_las_dir"><button class="btn" data-pick="folder" data-target="ex_las_dir">Choose…</button></div>
     </div>
-    <button class="btn go" data-run="extract" data-files="ex_files" data-opts="lasrecomp:ex_las,lasrecomp_dir:ex_las_dir">Extract</button>
+    <button class="btn go" data-run="extract" data-files="ex_files" data-opts="preset:ex_preset,exefs_only:ex_exefs_only,lasrecomp_dir:ex_las_dir">Extract</button>
   </div>
 </section>
 
@@ -372,7 +378,7 @@ document.querySelectorAll("[data-run]").forEach(b => b.onclick = () => {
   run(b.dataset.run, p);
 });
 
-$("ex_las").onchange = () => { $("ex_las_wrap").hidden = !$("ex_las").checked; };
+$("ex_preset").onchange = () => { $("ex_las_wrap").hidden = $("ex_preset").value !== "lasrecomp"; };
 $("nf_retro").onchange = () => {
   $("nf_rom_wrap").hidden = !$("nf_retro").checked;
   $("nf_nro_label").textContent = $("nf_retro").checked ? "RetroArch core path on SD" : "NRO path on SD";

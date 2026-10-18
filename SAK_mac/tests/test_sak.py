@@ -318,7 +318,7 @@ META_ID = "bb" * 16
 
 class ExtractTests(Tmp):
     def fake_hactool(self, title_id=0x01006BB00C6F0000, version=0, meta_type=0x80,
-                     build_id="ae16f71e002af8cb" + "00" * 24, with_sdk=True):
+                     build_id="ae16f71e002af8cb" + "00" * 24, with_sdk=True, extra_exefs=None):
         cnmt = self.tmp / "fake.cnmt"
         cnmt.write_bytes(build_cnmt(title_id, version, meta_type, [(PROG_ID, 1), (META_ID, 0)]))
         log = self.tmp / "hactool.json"
@@ -335,6 +335,8 @@ if "--exefsdir" in opt:
     e = pathlib.Path(opt["--exefsdir"]); e.mkdir()
     (e / "main").write_bytes(b"NSO0" + b"\\0" * 0x3C + bytes.fromhex({build_id!r}))
     if {with_sdk!r}: (e / "sdk").write_bytes(b"NSO0")
+    for n, data in {extra_exefs or {}!r}.items(): (e / n).write_bytes(data)
+if "--romfsdir" in opt:
     r = pathlib.Path(opt["--romfsdir"]); r.mkdir(); (r / "a.bin").write_bytes(b"x")
 """)
         return exe, log
@@ -390,7 +392,8 @@ if "--exefsdir" in opt:
         lines = []
         job = Job(on_log=lines.append)
         with mock.patch.dict(os.environ, {"SAK_HACTOOL": str(exe)}):
-            res = extract.extract_title(self.nsp(), extract.default_dest(self.tmp / "game.nsp", out, True), job, keys, True)
+            res = extract.extract_title(self.nsp(), extract.default_dest(self.tmp / "game.nsp", out, "lasrecomp"),
+                                        job, keys, "lasrecomp")
         self.assertEqual(res.folder, (out / "extracted").resolve())
         self.assertEqual(sorted(p.name for p in res.folder.iterdir()), ["exefs", "romfs"])
         self.assertEqual(res.exefs_files, ["main", "sdk"])
@@ -407,7 +410,49 @@ if "--exefsdir" in opt:
                         (dict(build_id="11" * 32), "build id"), (dict(with_sdk=False), "sdk")]:
             exe, _ = self.fake_hactool(**kw)
             with mock.patch.dict(os.environ, {"SAK_HACTOOL": str(exe)}), self.assertRaisesRegex(SakError, msg):
-                extract.extract_title(self.nsp(), self.tmp / f"o{len(msg)}" / "extracted", Job(), self.keys(), True)
+                extract.extract_title(self.nsp(), self.tmp / f"o{len(msg)}" / "extracted", Job(), self.keys(),
+                                      "lasrecomp")
+
+    TOTK_TID = 0x0100F2C0115B6000
+    TOTK_FILES = {"main.npdm": b"META", "rtld": b"NSO0rtld", "subsdk0": b"NSO0sub"}
+
+    def totk_hashes(self, build_id="ae16f71e002af8cb" + "00" * 24):
+        import hashlib
+
+        files = {"main": b"NSO0" + b"\0" * 0x3C + bytes.fromhex(build_id), "sdk": b"NSO0", **self.TOTK_FILES}
+        return {n: hashlib.sha256(d).hexdigest() for n, d in files.items()}
+
+    def test_totk_preset_checks_exefs_hashes_and_skips_romfs(self):
+        exe, log = self.fake_hactool(title_id=self.TOTK_TID, extra_exefs=self.TOTK_FILES)
+        out = self.tmp / "out"
+        lines = []
+        with mock.patch.dict(os.environ, {"SAK_HACTOOL": str(exe)}), \
+                mock.patch.dict(extract.TOTK_V100_EXEFS_SHA256, self.totk_hashes(), clear=True):
+            res = extract.extract_title(self.nsp(), extract.default_dest(self.tmp / "game.nsp", out, "totk"),
+                                        Job(on_log=lines.append), self.keys(), "totk", exefs_only=True)
+        self.assertEqual(res.folder, (out / "totk-1.0.0").resolve())
+        self.assertEqual([p.name for p in res.folder.iterdir()], ["exefs"])  # no romfs
+        self.assertEqual(res.exefs_files, ["main", "main.npdm", "rtld", "sdk", "subsdk0"])
+        self.assertTrue(any("all 5 exefs files match" in l for l in lines))
+        extract_call = json.loads(log.read_text().splitlines()[-1])
+        self.assertFalse(any(a.startswith("--romfsdir=") for a in extract_call))
+
+    def test_totk_preset_rejects_wrong_title_version_files_and_hash(self):
+        good = self.totk_hashes()
+        cases = [
+            (dict(title_id=0x01006BB00C6F0000, extra_exefs=self.TOTK_FILES), good, "Tears of the Kingdom"),
+            (dict(title_id=self.TOTK_TID, version=65536, extra_exefs=self.TOTK_FILES), good, "v1.0.0 without updates"),
+            (dict(title_id=self.TOTK_TID, extra_exefs={"rtld": b"NSO0rtld"}), good, "subsdk0"),
+            (dict(title_id=self.TOTK_TID, extra_exefs={**self.TOTK_FILES, "subsdk0": b"modified"}), good,
+             "subsdk0 do not match"),
+        ]
+        for i, (kw, hashes, msg) in enumerate(cases):
+            exe, _ = self.fake_hactool(**kw)
+            with mock.patch.dict(os.environ, {"SAK_HACTOOL": str(exe)}), \
+                    mock.patch.dict(extract.TOTK_V100_EXEFS_SHA256, hashes, clear=True), \
+                    self.assertRaisesRegex(SakError, msg):
+                extract.extract_title(self.nsp(), self.tmp / f"t{i}" / "totk-1.0.0", Job(), self.keys(), "totk")
+            self.assertFalse((self.tmp / f"t{i}" / "totk-1.0.0").exists())  # nothing left behind
 
     def test_generic_refuses_patch_and_uses_ticket(self):
         exe, _ = self.fake_hactool(meta_type=0x81)

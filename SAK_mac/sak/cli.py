@@ -98,9 +98,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add("extract", "extract exefs/ + romfs/ of a base game (NSP/NSZ/XCI)", lambda a, j: _each(
         a.files, lambda f: str(extract.extract_title(
-            f, extract.default_dest(f, out(a), a.lasrecomp, a.lasrecomp_dir), j, k(a), a.lasrecomp).folder)))
-    sp.add_argument("--lasrecomp", action="store_true",
-                    help="LASRecomp preset: require Link's Awakening v1.0.0, write <out>/extracted")
+            f, extract.default_dest(f, out(a), a.preset, a.lasrecomp_dir), j, k(a), a.preset, a.exefs_only).folder)))
+    sp.add_argument("--preset", choices=sorted(extract.PRESETS),
+                    help="lasrecomp: Link's Awakening v1.0.0 -> <out>/extracted; "
+                         "totk: Tears of the Kingdom v1.0.0, ExeFS hash-checked -> <out>/totk-1.0.0")
+    sp.add_argument("--lasrecomp", dest="preset", action="store_const", const="lasrecomp",
+                    help="same as --preset lasrecomp")
+    sp.add_argument("--totk", dest="preset", action="store_const", const="totk", help="same as --preset totk")
+    sp.add_argument("--exefs-only", action="store_true", help="skip romfs/ (TOTK's is 17 GB)")
     sp.add_argument("--lasrecomp-dir", type=Path, help="LASRecomp checkout to write extracted/ into")
 
     sp = add("forwarder", "build an NRO / RetroArch forwarder NSP", lambda a, j: [forwarder.build(
