@@ -147,7 +147,8 @@ def build(spec: ForwarderSpec, out_dir: Path, job: Job, keys: Path | None = None
         built = sorted((root / "hcb_nsp").glob("*.nsp"))
         if not built:
             raise SakError(f"NRO forwarder create failed: {spec.name} (hacbrewpack exit {code})")
-        dest = out_dir / f"{spec.name.replace('/', '_')}-{built[0].name}"
+        safe = re.sub(r'[\\/:*?"<>|]', "_", spec.name)  # also invalid in Windows file names
+        dest = out_dir / f"{safe}-{built[0].name}"
         shutil.copyfile(built[0], dest)
     job.log(f"NRO forwarder created: {dest}")
     return dest

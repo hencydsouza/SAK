@@ -89,6 +89,28 @@ sudo ./sak.command fat32 disk4 --confirm disk4 --cluster-64k   # ERASES disk4
 
 LASRecomp lifts the NSOs to C itself, so no separate decompilation step is needed.
 
+## Windows x64 build (new)
+
+The same code, web GUI and LASRecomp preset also ship for Windows as a zip with `SAK.exe`. `scripts/build_windows.sh` builds it **on macOS**; no Windows machine or PyInstaller is involved:
+
+| Part | Source |
+|---|---|
+| `SAK.exe` | `scripts/win/launcher.c`, cross-compiled with zig 0.14.1 (PyPI `ziglang`). It starts `python\pythonw.exe -m sak gui` and shows an error box if the server fails to start (log in `logs\sak.log`) |
+| `python\` | Official CPython 3.12.10 embeddable zip (sha256 pinned, matched against python.org's MD5 and size), plus Windows wheels pinned to the macOS venv's versions. Every `Requires-Dist` is re-checked with Windows markers |
+| `hactool.exe`, `hacbrewpack.exe` | The same pinned sources as on macOS, cross-compiled with zig (with large-file flags checked) |
+| `savex.exe` | `savex/` published for `win-x64`: self-contained, single file |
+| `guiformat.exe` | Taken unchanged from `SAK_64bit/bin` (the FAT32 formatter the original SAK shipped) |
+| NSC_Builder | Same pinned commit and patch; ctypes stand-ins for the two pywin32 calls squirrel makes (`scripts/win/shims`) |
+
+What differs on Windows:
+- **FAT32:** opens guiformat, which picks the drive and confirms the erase itself. SAK never erases a disk itself.
+- **Drives:** removable drives are listed by drive letter.
+- **Archive bit:** set with `SetFileAttributesW`.
+- **File pickers:** the native Open/Folder dialogs.
+- **squirrel:** runs through `python -m sak.squirrel_run`, because the embeddable interpreter runs in isolated mode and leaves out the script's folder.
+
+Build: `scripts/build_windows.sh` → `dist/SAK-windows-x64-<version>.zip`. Test on a Windows PC: `powershell -ExecutionPolicy Bypass -File scripts\win\smoke_test.ps1 -Sak C:\path\to\SAK`. CI (`.github/workflows/sak-windows.yml`) builds on macOS and runs that smoke test on a Windows runner.
+
 ## Keys hygiene
 
 hactool and hacbrewpack reject an entire keyset if a single line is malformed. Some dumpers write 34-hex-digit `*_kek_source` lines. The port therefore passes those tools a temporary copy containing only well-formed lines; the copy is readable only by you and deleted afterwards. Your own `prod.keys` is never modified. hactool also echoes unknown keys with their values, and the port drops those lines from its logs.

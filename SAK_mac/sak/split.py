@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from .common import (
@@ -31,6 +32,16 @@ def set_archive_bit(path: Path, job: Job | None = None) -> bool:
     APFS this is a no-op for the Switch and must be redone after copying (e.g. Hekate
     "Fix Archive bit").
     """
+    if sys.platform == "win32":  # SAK: FileSetAttrib($folder, "+A")
+        import ctypes
+
+        k32 = ctypes.windll.kernel32
+        k32.GetFileAttributesW.restype = ctypes.c_uint32
+        attrs = k32.GetFileAttributesW(str(path))
+        ok = attrs != 0xFFFFFFFF and bool(k32.SetFileAttributesW(str(path), attrs | 0x20))  # ARCHIVE
+        if not ok and job:
+            job.log(f"warning: could not set archive bit on {path}")
+        return ok
     result = subprocess.run(["chflags", "noarch", str(path)], capture_output=True, text=True)
     if result.returncode != 0 and job:
         job.log(f"warning: could not set archive bit on {path}: {result.stderr.strip()}")

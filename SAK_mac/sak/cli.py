@@ -32,7 +32,7 @@ def _each(paths, fn):
 
 def cmd_doctor(a, job):
     ok = True
-    for name in ("hactool", "hacbrewpack", "savex"):
+    for name in tools.NATIVE_TOOLS:
         try:
             print(f"[ok]      {name}: {tools.find_tool(name)}")
         except SakError as e:
@@ -128,9 +128,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add("fat32", "ERASE an external disk and format it FAT32", lambda a, j: drives.format_fat32(
         a.disk, a.label, j, a.confirm, a.cluster_64k) or [], files=False)
-    sp.add_argument("disk", help="whole-disk identifier, e.g. disk4 (see `sak drives`)")
+    windows = sys.platform == "win32"  # Windows opens guiformat, which picks the drive and confirms itself
+    sp.add_argument("disk", nargs="?" if windows else None, default="",
+                    help="whole-disk identifier, e.g. disk4 (see `sak drives`); unused on Windows")
     sp.add_argument("--label", default="SWITCH")
-    sp.add_argument("--confirm", required=True, help="repeat the disk identifier to confirm erasing it")
+    sp.add_argument("--confirm", required=not windows, default="",
+                    help="repeat the disk identifier to confirm erasing it")
     sp.add_argument("--cluster-64k", action="store_true", help="64 KiB clusters (needs sudo)")
 
     sp = add("gui", "start the web GUI", lambda a, j: __import__("sak.gui.server", fromlist=["serve"]).serve(

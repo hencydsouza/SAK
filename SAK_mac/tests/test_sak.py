@@ -458,5 +458,138 @@ class GuiTests(unittest.TestCase):
             httpd.server_close()
 
 
+class FakeKernel32:
+    """Stand-in for ctypes.windll.kernel32 (drive letters, volume info, file attributes)."""
+
+    def __init__(self, drives=None):
+        self.drives = drives or {}  # letter -> (drive_type, label, fs)
+        self.attrs = {}
+        # plain functions, so code under test can set .restype as on real WinDLL functions
+        self.GetFileAttributesW = lambda path: self.attrs.get(path, 0x10)
+
+    def GetLogicalDrives(self):
+        return sum(1 << (ord(l) - 65) for l in self.drives)
+
+    def GetDriveTypeW(self, root):
+        return self.drives[root[0]][0]
+
+    def GetVolumeInformationW(self, root, label, n1, serial, maxlen, flags, fs, n2):
+        _, lab, fsname = self.drives[root[0]]
+        label.value, fs.value = lab, fsname
+        return 1
+
+    def SetFileAttributesW(self, path, attrs):
+        self.attrs[path] = attrs
+        return 1
+
+
+class WindowsLogicTests(Tmp):
+    """Windows-only branches, exercised on any host with the platform checks patched."""
+
+    def test_find_tool_uses_exe_suffix(self):
+        write_exe(self.tmp / "hactool.exe", "")
+        with mock.patch.multiple(tools, WINDOWS=True, EXE=".exe", TOOLS_BIN=self.tmp), \
+                mock.patch.dict(os.environ, {"SAK_HACTOOL": ""}), mock.patch("shutil.which", return_value=None):
+            self.assertEqual(tools.find_tool("hactool"), self.tmp / "hactool.exe")
+            with self.assertRaisesRegex(SakError, "re-extract the SAK zip"):
+                tools.find_tool("savex")
+
+    def test_squirrel_cmd_uses_console_python_and_runner(self):
+        script = self.tmp / "squirrel.py"
+        script.write_text("")
+        with mock.patch.multiple(tools, WINDOWS=True, VENV_PYTHON=self.tmp / "none.exe"), \
+                mock.patch.dict(os.environ, {"SAK_SQUIRREL": str(script)}), \
+                mock.patch.object(sys, "executable", "C:/SAK/python/pythonw.exe"):
+            cmd = tools.squirrel_cmd()
+        self.assertTrue(cmd[0].endswith("python.exe") and not cmd[0].endswith("pythonw.exe"))
+        self.assertEqual(cmd[1:], ["-W", "ignore::SyntaxWarning", "-m", "sak.squirrel_run", str(script)])
+
+    def test_squirrel_runner_restores_script_dir_under_isolated_mode(self):
+        (self.tmp / "helper_mod.py").write_text("VALUE = 'sibling import ok'\n")
+        (self.tmp / "squirrel.py").write_text(
+            "import sys, helper_mod\nprint(helper_mod.VALUE, sys.argv[1:], __name__)\n")
+        root = Path(__file__).resolve().parent.parent
+        code = (f"import sys, runpy; sys.path.insert(0, {str(root)!r}); "
+                f"sys.argv = ['x', {str(self.tmp / 'squirrel.py')!r}, '-o', 'a b']; "
+                "runpy.run_module('sak.squirrel_run', run_name='__main__')")
+        import subprocess
+        res = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("sibling import ok ['-o', 'a b'] __main__", res.stdout)
+
+    def test_windows_file_picker_script(self):
+        import base64
+        import subprocess
+
+        from sak.gui import server
+
+        out = mock.Mock(returncode=0, stdout="C:\\Games\\A.xci\r\nD:\\B b.xci\r\n".encode())
+        with mock.patch.object(subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True), \
+                mock.patch.object(server.subprocess, "run", return_value=out) as run:
+            paths = server._windows_pick("files", "Select the XCI's", ["xci"])
+        self.assertEqual(paths, ["C:\\Games\\A.xci", "D:\\B b.xci"])
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:4], ["powershell.exe", "-NoProfile", "-STA", "-NonInteractive"])
+        script = base64.b64decode(argv[-1]).decode("utf-16-le")
+        self.assertIn("OpenFileDialog", script)
+        self.assertIn("Title='Select the XCI''s'", script)  # PowerShell single-quote escaping
+        self.assertIn("Filter='XCI files|*.xci|All files|*.*'", script)
+        self.assertIn("Multiselect=$true", script)
+        with mock.patch.object(subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True), \
+                mock.patch.object(server.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=b"C:\\Out\r\n")) as run:
+            self.assertEqual(server._windows_pick("folder", "Output", []), ["C:\\Out"])
+        self.assertIn("FolderBrowserDialog", base64.b64decode(run.call_args.args[0][-1]).decode("utf-16-le"))
+
+    def test_removable_drives_listing(self):
+        import ctypes
+
+        from sak import drives
+
+        k32 = FakeKernel32({"C": (3, "System", "NTFS"), "E": (2, "SWITCH", "FAT32"), "F": (2, "", "exFAT")})
+        usage = mock.Mock(total=64 * 10**9)
+        with mock.patch.object(ctypes, "windll", mock.Mock(kernel32=k32), create=True), \
+                mock.patch.object(drives, "WINDOWS", True), mock.patch("shutil.disk_usage", return_value=usage):
+            found = drives.external_disks()
+        self.assertEqual([(d.identifier, d.name, d.mount_points) for d in found],
+                         [("E:", "SWITCH (FAT32)", ["E:\\"]), ("F:", "Removable (exFAT)", ["F:\\"])])
+
+    def test_fat32_opens_guiformat_and_never_erases(self):
+        from sak import drives
+
+        logs = []
+        with mock.patch.object(drives, "WINDOWS", True), \
+                mock.patch.object(drives, "find_tool", return_value=Path("C:/SAK/tools/bin/guiformat.exe")), \
+                mock.patch.object(drives.subprocess, "Popen") as popen, \
+                mock.patch.object(drives, "run") as run:
+            drives.format_fat32("", "SWITCH", Job(on_log=logs.append), "")
+        popen.assert_called_once()
+        run.assert_not_called()  # no diskutil / erase from our side on Windows
+        self.assertIn("guiformat.exe", logs[0])
+
+    def test_archive_bit_sets_attribute(self):
+        import ctypes
+
+        k32 = FakeKernel32()
+        with mock.patch.object(ctypes, "windll", mock.Mock(kernel32=k32), create=True), \
+                mock.patch.object(split.sys, "platform", "win32"):
+            self.assertTrue(split.set_archive_bit(self.tmp / "Game_splitted.nsp"))
+        self.assertEqual(k32.attrs[str(self.tmp / "Game_splitted.nsp")], 0x10 | 0x20)
+
+    def test_uppercase_extension_without_symlink(self):
+        game = self.tmp / "Game.NSP"
+        game.write_bytes(b"x")
+        with mock.patch.object(ops.sys, "platform", "win32"):
+            spelled = ops._lowercase_ext(game, self.tmp / "work")
+        self.assertEqual(spelled.name, "Game.nsp")
+        self.assertFalse((self.tmp / "work").exists())
+
+    def test_fat32_cli_args_optional_on_windows(self):
+        from sak import cli
+
+        with mock.patch.object(cli.sys, "platform", "win32"), mock.patch.object(cli.drives, "format_fat32") as fmt:
+            self.assertEqual(cli.main(["fat32"]), 0)
+        fmt.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

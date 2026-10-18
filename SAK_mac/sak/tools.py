@@ -18,7 +18,13 @@ PORT_ROOT = Path(__file__).resolve().parent.parent
 RESOURCES = Path(__file__).resolve().parent / "resources"
 TOOLS_BIN = PORT_ROOT / "tools" / "bin"
 NSCB_ZTOOLS = PORT_ROOT / "tools" / "nscb" / "py" / "ztools"
-VENV_PYTHON = PORT_ROOT / ".venv" / "bin" / "python"
+WINDOWS = sys.platform == "win32"
+EXE = ".exe" if WINDOWS else ""
+VENV_PYTHON = PORT_ROOT / ".venv" / ("Scripts/python.exe" if WINDOWS else "bin/python")
+# External programs SAK runs; Windows formats through guiformat.exe like the original SAK.
+NATIVE_TOOLS = ("hactool", "hacbrewpack", "savex") + (("guiformat",) if WINDOWS else ())
+# Windows build: tools are console programs; keep them from flashing a window under the GUI.
+_POPEN_FLAGS = subprocess.CREATE_NO_WINDOW if WINDOWS else 0
 
 KEY_SEARCH = [
     PORT_ROOT / "keys" / "prod.keys",
@@ -39,7 +45,7 @@ def find_keys(explicit: str | os.PathLike | None = None) -> Path:
         if c.is_file():
             return c
     raise SakError(
-        "keys.dat/prod.keys missing\nPlace your prod.keys in SAK_mac/keys/ or ~/.switch/, "
+        "keys.dat/prod.keys missing\nPlace your prod.keys in the keys folder next to SAK or ~/.switch/, "
         "set SAK_KEYS, or pass --keys to use this feature!"
     )
 
@@ -62,7 +68,8 @@ def sanitized_keys(keys: Path):
             lines.append(f"{m.group(1)} = {m.group(2)}\n")
     fd, tmp = tempfile.mkstemp(prefix="sak-keys-", suffix=".keys")
     try:
-        os.fchmod(fd, 0o600)
+        if not WINDOWS:  # %TEMP% is already private to the user on Windows
+            os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w") as fh:
             fh.writelines(lines)
         yield Path(tmp)
@@ -76,20 +83,28 @@ _SECRET_ECHO = re.compile(r"Failed to match key|must be 32 hex digits|must be \d
 
 def find_tool(name: str) -> Path:
     env = os.environ.get(f"SAK_{name.upper()}")
-    for c in [Path(env) if env else None, TOOLS_BIN / name]:
+    for c in [Path(env) if env else None, TOOLS_BIN / (name + EXE)]:
         if c and c.is_file() and os.access(c, os.X_OK):
             return c
     found = shutil.which(name)
     if found:
         return Path(found)
-    raise SakError(f"{name} not found - run scripts/setup.sh (or set SAK_{name.upper()})")
+    setup = "the tools folder is incomplete - re-extract the SAK zip" if WINDOWS else "run scripts/setup.sh"
+    raise SakError(f"{name} not found - {setup} (or set SAK_{name.upper()})")
 
 
 def squirrel_cmd() -> list[str]:
     script = Path(os.environ.get("SAK_SQUIRREL", NSCB_ZTOOLS / "squirrel.py"))
     if not script.is_file():
         raise SakError("NSC_Builder squirrel.py not found - run scripts/setup.sh")
-    python = VENV_PYTHON if VENV_PYTHON.is_file() else Path(sys.executable)
+    if VENV_PYTHON.is_file():
+        python = VENV_PYTHON
+    else:
+        python = Path(sys.executable)
+        if python.name.lower() == "pythonw.exe":  # GUI interpreter: run squirrel on the console one
+            python = python.with_name("python.exe")
+    if WINDOWS:  # embeddable Python runs isolated: see sak/squirrel_run.py
+        return [str(python), "-W", "ignore::SyntaxWarning", "-m", "sak.squirrel_run", str(script)]
     return [str(python), "-W", "ignore::SyntaxWarning", str(script)]
 
 
@@ -110,6 +125,7 @@ def run(cmd: list[str], job: Job, cwd: Path | None = None, env: dict | None = No
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
+        creationflags=_POPEN_FLAGS,
     )
     output: list[str] = []
 
